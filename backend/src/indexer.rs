@@ -1,0 +1,1070 @@
+//! Indexer task.
+//!
+//! Polls `eth_getLogs` from `deploymentBlock` in bounded chunks for
+//!
+//!   controller  VaultCreated, SeriesCreated, Issued, Exited, Settled, Finalized, IssuanceStopped,
+//!               WorthlessBurned, SeriesClosed
+//!   accumulator Checkpointed
+//!   router      Swapped
+//!   aqua        Shipped, Docked, Pulled, Pushed  (only where `app == router`)
+//!   vaults      Deposited, FreeWithdrawn, LockedIncreased, LockedDecreased, ReceiptRegistered,
+//!               StrategyShipped, StrategyDocked
+//!
+//! and maps `orderHash -> (series_id, leg)` so a `Swapped` can be attributed to ISSUE, EXIT or SETTLE.
+//!
+//! Vault addresses are discovered from `VaultCreated`, so each chunk is scanned twice: once for the
+//! fixed addresses, then once for the vault set, which the first pass may have grown. That ordering
+//! matters — a writer can create a vault and deposit into it in the same block.
+//!
+//! The cursor never advances over a log that failed to process, and a node reset (head below the
+//! cursor, a changed block hash at the cursor, or a different manifest) triggers a full re-index.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::Duration;
+
+use alloy::eips::BlockNumberOrTag;
+use alloy::primitives::{Address, B256, U256};
+use alloy::providers::Provider;
+use alloy::rpc::types::{Filter, Log};
+use alloy::sol_types::SolEvent;
+use anyhow::{Context, Result};
+use serde::Serialize;
+use tokio::sync::RwLock;
+
+use crate::abi::{
+    Aqua, AquaSwapVMRouter, TremorMakerVault, VarianceAccumulator, VarianceSeriesFactory,
+};
+use crate::db::{
+    AquaEventRow, CheckpointRow, FillRow, FinalizationRow, SeriesRow, VaultEventRow, VaultRow,
+};
+use crate::rpc::{retry, transport_retryable};
+use crate::util::{nonnegative_u64, now_unix, sqlite_i64};
+use crate::AppState;
+
+pub const CHUNK_BLOCKS: u64 = 2000;
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct IndexerStatus {
+    pub chain_id: Option<u64>,
+    pub head_block: Option<u64>,
+    pub indexed_block: Option<u64>,
+    pub series_count: u64,
+    pub vault_count: u64,
+    pub last_error: Option<String>,
+    pub last_tick_at: Option<u64>,
+    pub resets: u64,
+}
+
+#[derive(Clone)]
+pub struct IndexerHandle(pub Arc<RwLock<IndexerStatus>>);
+
+impl IndexerHandle {
+    pub fn new(chain_id: Option<u64>) -> Self {
+        Self(Arc::new(RwLock::new(IndexerStatus {
+            chain_id,
+            ..Default::default()
+        })))
+    }
+    pub async fn snapshot(&self) -> IndexerStatus {
+        self.0.read().await.clone()
+    }
+}
+
+/// Which of a series' three Aqua strategies a fill belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Leg {
+    Issue,
+    Exit,
+    Settle,
+}
+
+impl Leg {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Leg::Issue => "issue",
+            Leg::Exit => "exit",
+            Leg::Settle => "settle",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "issue" => Some(Leg::Issue),
+            "exit" => Some(Leg::Exit),
+            "settle" => Some(Leg::Settle),
+            _ => None,
+        }
+    }
+
+    /// ISSUE takes the quote token in; the two burn legs take receipts in and pay the quote token out.
+    pub fn quote_is_amount_in(self) -> bool {
+        matches!(self, Leg::Issue)
+    }
+}
+
+/// `orderHash` (== the Aqua `strategyHash`) → `(series_id, leg)`, built from `SeriesCreated`.
+#[derive(Clone, Debug, Default)]
+pub struct OrderMap {
+    map: HashMap<B256, (u64, Leg)>,
+    series: HashSet<u64>,
+}
+
+impl OrderMap {
+    pub fn insert_series(&mut self, id: u64, issue: B256, exit: B256, settle: B256) {
+        self.map.insert(issue, (id, Leg::Issue));
+        self.map.insert(exit, (id, Leg::Exit));
+        self.map.insert(settle, (id, Leg::Settle));
+        self.series.insert(id);
+    }
+
+    pub fn insert_one(&mut self, hash: B256, id: u64, leg: Leg) {
+        self.map.insert(hash, (id, leg));
+        self.series.insert(id);
+    }
+
+    pub fn lookup(&self, hash: &B256) -> Option<(u64, Leg)> {
+        self.map.get(hash).copied()
+    }
+
+    pub fn series_count(&self) -> u64 {
+        self.series.len() as u64
+    }
+
+    pub fn from_rows(rows: &[(String, i64, String)]) -> Self {
+        let mut m = Self::default();
+        for (hash, id, leg) in rows {
+            if let (Ok(h), Some(leg)) = (hash.parse::<B256>(), Leg::parse(leg)) {
+                m.insert_one(h, *id as u64, leg);
+            }
+        }
+        m
+    }
+}
+
+/// Inclusive block ranges of at most `size` blocks covering `from..=to`.
+pub fn block_chunks(from: u64, to: u64, size: u64) -> Vec<(u64, u64)> {
+    let mut out = Vec::new();
+    if from > to || size == 0 {
+        return out;
+    }
+    let mut a = from;
+    while a <= to {
+        let b = a.saturating_add(size - 1).min(to);
+        out.push((a, b));
+        if b == u64::MAX {
+            break;
+        }
+        a = b + 1;
+    }
+    out
+}
+
+/// Quote base units paid or received per 1e18 receipt units.
+pub fn price_per_unit(quote: U256, units: U256) -> U256 {
+    if units.is_zero() {
+        U256::ZERO
+    } else {
+        quote * U256::from(1_000_000_000_000_000_000u128) / units
+    }
+}
+
+fn hex_addr(a: Address) -> String {
+    format!("{a:#x}")
+}
+
+fn hex_b256(h: B256) -> String {
+    format!("{h:#x}")
+}
+
+pub async fn run(state: Arc<AppState>) {
+    let mut order_map = match state.db.orders_all().await {
+        Ok(rows) => OrderMap::from_rows(&rows),
+        Err(e) => {
+            tracing::warn!(error = %e, "could not rebuild the order map from sqlite");
+            OrderMap::default()
+        }
+    };
+    let mut vaults: HashSet<Address> = match state.db.vaults_all().await {
+        Ok(rows) => rows.iter().filter_map(|v| v.address.parse().ok()).collect(),
+        Err(e) => {
+            tracing::warn!(error = %e, "could not rebuild the vault set from sqlite");
+            HashSet::new()
+        }
+    };
+    if order_map.series_count() > 0 || !vaults.is_empty() {
+        tracing::info!(
+            series = order_map.series_count(),
+            vaults = vaults.len(),
+            "index restored from sqlite"
+        );
+    }
+    let poll = Duration::from_millis(state.cfg.poll_ms.max(250));
+    loop {
+        match tick(&state, &mut order_map, &mut vaults).await {
+            Ok(()) => state.indexer.0.write().await.last_error = None,
+            Err(e) => {
+                tracing::warn!(error = format!("{e:#}"), "indexer tick failed");
+                state.indexer.0.write().await.last_error = Some(format!("{e:#}"));
+            }
+        }
+        tokio::time::sleep(poll).await;
+    }
+}
+
+async fn block_hash(state: &AppState, n: u64) -> Result<Option<String>> {
+    let p = &state.provider;
+    let b = retry("eth_getBlockByNumber", transport_retryable, || async {
+        p.get_block_by_number(BlockNumberOrTag::Number(n)).await
+    })
+    .await
+    .with_context(|| format!("eth_getBlockByNumber({n})"))?;
+    Ok(b.map(|b| format!("{:#x}", b.header.hash)))
+}
+
+fn controller_topics() -> Vec<B256> {
+    vec![
+        VarianceSeriesFactory::VaultCreated::SIGNATURE_HASH,
+        VarianceSeriesFactory::SeriesCreated::SIGNATURE_HASH,
+        VarianceSeriesFactory::Issued::SIGNATURE_HASH,
+        VarianceSeriesFactory::Exited::SIGNATURE_HASH,
+        VarianceSeriesFactory::Settled::SIGNATURE_HASH,
+        VarianceSeriesFactory::Finalized::SIGNATURE_HASH,
+        VarianceSeriesFactory::IssuanceStopped::SIGNATURE_HASH,
+        VarianceSeriesFactory::WorthlessBurned::SIGNATURE_HASH,
+        VarianceSeriesFactory::SeriesClosed::SIGNATURE_HASH,
+        VarianceAccumulator::Checkpointed::SIGNATURE_HASH,
+        AquaSwapVMRouter::Swapped::SIGNATURE_HASH,
+        Aqua::Shipped::SIGNATURE_HASH,
+        Aqua::Docked::SIGNATURE_HASH,
+        Aqua::Pulled::SIGNATURE_HASH,
+        Aqua::Pushed::SIGNATURE_HASH,
+    ]
+}
+
+fn vault_topics() -> Vec<B256> {
+    vec![
+        TremorMakerVault::Deposited::SIGNATURE_HASH,
+        TremorMakerVault::FreeWithdrawn::SIGNATURE_HASH,
+        TremorMakerVault::LockedIncreased::SIGNATURE_HASH,
+        TremorMakerVault::LockedDecreased::SIGNATURE_HASH,
+        TremorMakerVault::ReceiptRegistered::SIGNATURE_HASH,
+        TremorMakerVault::StrategyShipped::SIGNATURE_HASH,
+        TremorMakerVault::StrategyDocked::SIGNATURE_HASH,
+    ]
+}
+
+async fn tick(
+    state: &AppState,
+    order_map: &mut OrderMap,
+    vaults: &mut HashSet<Address>,
+) -> Result<()> {
+    let provider = &state.provider;
+    let m = &state.manifest;
+
+    let head = retry("eth_blockNumber", transport_retryable, || async {
+        provider.get_block_number().await
+    })
+    .await
+    .context("eth_blockNumber")?;
+
+    let chain_id = {
+        let known = state.indexer.0.read().await.chain_id;
+        match known {
+            Some(c) => Some(c),
+            None => {
+                let c = provider.get_chain_id().await.ok();
+                state.indexer.0.write().await.chain_id = c;
+                c
+            }
+        }
+    };
+
+    let mut cursor = state.db.cursor().await?;
+    if let Some(c) = &cursor {
+        let mut reason: Option<&str> = None;
+        let cursor_deployment = nonnegative_u64(c.deployment_block, "cursor deployment block")?;
+        let cursor_block = nonnegative_u64(c.last_block, "cursor last block")?;
+        if cursor_deployment != m.deployment_block || c.controller != hex_addr(m.series_factory) {
+            reason = Some("deployment manifest changed");
+        } else if head < cursor_block {
+            reason = Some("head is below the cursor (node reset)");
+        } else if let Some(stored) = &c.last_block_hash {
+            if let Some(onchain) = block_hash(state, cursor_block).await? {
+                if &onchain != stored {
+                    reason = Some("block hash at the cursor changed (node reset / reorg)");
+                }
+            }
+        }
+        if let Some(reason) = reason {
+            tracing::warn!(
+                reason,
+                cursor = c.last_block,
+                head,
+                deployment_block = m.deployment_block,
+                "resetting index"
+            );
+            state.db.reset_chain_state().await?;
+            *order_map = OrderMap::default();
+            vaults.clear();
+            cursor = None;
+            let mut st = state.indexer.0.write().await;
+            st.resets += 1;
+            st.indexed_block = None;
+            st.series_count = 0;
+            st.vault_count = 0;
+        }
+    }
+
+    let start = match cursor.as_ref() {
+        Some(c) => nonnegative_u64(c.last_block, "cursor last block")?
+            .checked_add(1)
+            .context("cursor block overflow")?,
+        None => m.deployment_block,
+    };
+    {
+        let mut st = state.indexer.0.write().await;
+        st.head_block = Some(head);
+        st.last_tick_at = Some(now_unix());
+        if let Some(c) = &cursor {
+            st.indexed_block = Some(nonnegative_u64(c.last_block, "cursor last block")?);
+        }
+    }
+    if start > head {
+        return Ok(());
+    }
+
+    let fixed = vec![m.series_factory, m.accumulator, m.router, m.aqua];
+    let fixed_topics = controller_topics();
+    let vault_event_topics = vault_topics();
+
+    for (from, to) in block_chunks(start, head, CHUNK_BLOCKS) {
+        let mut ts_cache: HashMap<u64, u64> = HashMap::new();
+
+        // Pass 1: the fixed addresses. This is what discovers new vaults.
+        let filter = Filter::new()
+            .address(fixed.clone())
+            .from_block(from)
+            .to_block(to)
+            .event_signature(fixed_topics.clone());
+        let mut logs = retry("eth_getLogs", transport_retryable, || async {
+            provider.get_logs(&filter).await
+        })
+        .await
+        .with_context(|| format!("eth_getLogs {from}..={to}"))?;
+        logs.sort_by_key(|l| (l.block_number.unwrap_or(0), l.log_index.unwrap_or(0)));
+        for log in &logs {
+            process_log(state, order_map, vaults, log, &mut ts_cache)
+                .await
+                .with_context(|| {
+                    format!(
+                        "processing log {:?}; cursor not advanced",
+                        log.transaction_hash
+                    )
+                })?;
+        }
+
+        // Pass 2: the vaults, including any the first pass just found.
+        let mut vault_log_count = 0usize;
+        if !vaults.is_empty() {
+            let addresses: Vec<Address> = vaults.iter().copied().collect();
+            let vfilter = Filter::new()
+                .address(addresses)
+                .from_block(from)
+                .to_block(to)
+                .event_signature(vault_event_topics.clone());
+            let mut vlogs = retry("eth_getLogs(vaults)", transport_retryable, || async {
+                provider.get_logs(&vfilter).await
+            })
+            .await
+            .with_context(|| format!("eth_getLogs vaults {from}..={to}"))?;
+            vlogs.sort_by_key(|l| (l.block_number.unwrap_or(0), l.log_index.unwrap_or(0)));
+            vault_log_count = vlogs.len();
+            for log in &vlogs {
+                process_vault_log(state, log, &mut ts_cache)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "processing vault log {:?}; cursor not advanced",
+                            log.transaction_hash
+                        )
+                    })?;
+            }
+        }
+
+        let hash = block_hash(state, to).await?;
+        state
+            .db
+            .set_cursor(to, hash, m.deployment_block, m.series_factory, chain_id)
+            .await?;
+        {
+            let mut st = state.indexer.0.write().await;
+            st.indexed_block = Some(to);
+            st.series_count = order_map.series_count();
+            st.vault_count = vaults.len() as u64;
+        }
+        if !logs.is_empty() || vault_log_count > 0 {
+            tracing::info!(
+                from,
+                to,
+                logs = logs.len(),
+                vault_logs = vault_log_count,
+                "indexed chunk"
+            );
+        } else {
+            tracing::debug!(from, to, "indexed empty chunk");
+        }
+    }
+    Ok(())
+}
+
+async fn block_timestamp(
+    state: &AppState,
+    log: &Log,
+    block: u64,
+    cache: &mut HashMap<u64, u64>,
+) -> Result<u64> {
+    if let Some(ts) = log.block_timestamp {
+        return Ok(ts);
+    }
+    if let Some(ts) = cache.get(&block) {
+        return Ok(*ts);
+    }
+    let p = &state.provider;
+    let b = retry("eth_getBlockByNumber", transport_retryable, || async {
+        p.get_block_by_number(BlockNumberOrTag::Number(block)).await
+    })
+    .await
+    .with_context(|| format!("eth_getBlockByNumber({block})"))?
+    .with_context(|| format!("block {block} not found"))?;
+    let ts = b.header.timestamp;
+    cache.insert(block, ts);
+    Ok(ts)
+}
+
+/// Common log identity: block, tx hash, log index, timestamp.
+struct LogMeta {
+    block: i64,
+    tx_hash: String,
+    log_index: i64,
+    timestamp: i64,
+}
+
+async fn log_meta(state: &AppState, log: &Log, cache: &mut HashMap<u64, u64>) -> Result<LogMeta> {
+    let block = log.block_number.context("log without block number")?;
+    Ok(LogMeta {
+        block: sqlite_i64(block, "log block")?,
+        tx_hash: log.transaction_hash.map(hex_b256).unwrap_or_default(),
+        log_index: sqlite_i64(log.log_index.unwrap_or(0), "log index")?,
+        timestamp: sqlite_i64(
+            block_timestamp(state, log, block, cache).await?,
+            "block timestamp",
+        )?,
+    })
+}
+
+async fn process_log(
+    state: &AppState,
+    order_map: &mut OrderMap,
+    vaults: &mut HashSet<Address>,
+    log: &Log,
+    ts_cache: &mut HashMap<u64, u64>,
+) -> Result<()> {
+    let m = &state.manifest;
+    let addr = log.inner.address;
+    let Some(topic0) = log.inner.data.topics().first().copied() else {
+        return Ok(());
+    };
+    let meta = log_meta(state, log, ts_cache).await?;
+
+    if addr == m.series_factory {
+        return process_controller_log(state, order_map, vaults, log, topic0, &meta).await;
+    }
+    if addr == m.accumulator && topic0 == VarianceAccumulator::Checkpointed::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<VarianceAccumulator::Checkpointed>()
+            .context("decode Checkpointed")?
+            .inner
+            .data;
+        let row = CheckpointRow {
+            tx_hash: meta.tx_hash.clone(),
+            log_index: meta.log_index,
+            block: meta.block,
+            timestamp: meta.timestamp,
+            series_id: sqlite_i64(
+                u64::try_from(ev.seriesId).context("series id")?,
+                "series id",
+            )?,
+            from_sample: sqlite_i64(
+                u64::try_from(ev.fromSample).context("from sample")?,
+                "from sample",
+            )?,
+            to_sample: sqlite_i64(
+                u64::try_from(ev.toSample).context("to sample")?,
+                "to sample",
+            )?,
+            processed_through: sqlite_i64(ev.processedThrough.to::<u64>(), "processed through")?,
+            last_round_id: ev.lastRoundId.to_string(),
+            sum_squared_returns: ev.sumSquaredReturnsWad.to_string(),
+        };
+        tracing::info!(
+            series_id = row.series_id,
+            from = row.from_sample,
+            to = row.to_sample,
+            "Checkpointed"
+        );
+        state.db.insert_checkpoint(&row).await?;
+        return Ok(());
+    }
+    if addr == m.router && topic0 == AquaSwapVMRouter::Swapped::SIGNATURE_HASH {
+        return process_swap(state, order_map, log, &meta).await;
+    }
+    if addr == m.aqua {
+        return process_aqua(state, order_map, log, topic0, &meta).await;
+    }
+    Ok(())
+}
+
+async fn process_controller_log(
+    state: &AppState,
+    order_map: &mut OrderMap,
+    vaults: &mut HashSet<Address>,
+    log: &Log,
+    topic0: B256,
+    meta: &LogMeta,
+) -> Result<()> {
+    if topic0 == VarianceSeriesFactory::VaultCreated::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<VarianceSeriesFactory::VaultCreated>()
+            .context("decode VaultCreated")?
+            .inner
+            .data;
+        let row = VaultRow {
+            address: hex_addr(ev.vault),
+            writer: hex_addr(ev.writer),
+            quote_token: hex_addr(ev.quoteToken),
+            created_block: meta.block,
+            created_tx: meta.tx_hash.clone(),
+            created_at: meta.timestamp,
+            deposited: "0".into(),
+            withdrawn: "0".into(),
+            last_balance: None,
+            last_locked: None,
+            last_event_at: None,
+        };
+        state.db.insert_vault(&row).await?;
+        vaults.insert(ev.vault);
+        tracing::info!(vault = %row.address, writer = %row.writer, "VaultCreated");
+        return Ok(());
+    }
+
+    if topic0 == VarianceSeriesFactory::SeriesCreated::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<VarianceSeriesFactory::SeriesCreated>()
+            .context("decode SeriesCreated")?
+            .inner
+            .data;
+        let id = u64::try_from(ev.seriesId).context("series id exceeds u64")?;
+        let p = &ev.params;
+        let row = SeriesRow {
+            id: sqlite_i64(id, "series id")?,
+            writer: hex_addr(ev.writer),
+            vault: hex_addr(ev.vault),
+            receipt: hex_addr(ev.receipt),
+            issue_order_hash: hex_b256(ev.issueOrderHash),
+            exit_order_hash: hex_b256(ev.exitOrderHash),
+            settlement_order_hash: hex_b256(ev.settlementOrderHash),
+            feed: hex_addr(p.feed),
+            quote_token: hex_addr(p.quoteToken),
+            start: sqlite_i64(p.start.to::<u64>(), "series start")?,
+            expiry: sqlite_i64(p.expiry.to::<u64>(), "series expiry")?,
+            sale_end: sqlite_i64(p.saleEnd.to::<u64>(), "series sale end")?,
+            sample_interval: p.sampleInterval as i64,
+            unit_notional: p.unitNotional.to_string(),
+            cap_variance: p.capVariance.to_string(),
+            anchor_variance: p.anchorVariance.to_string(),
+            impact_per_unit: p.impactPerUnit.to_string(),
+            half_life: p.halfLife as i64,
+            half_spread_bps: p.halfSpreadBps as i64,
+            max_units: p.maxUnits.to_string(),
+            created_block: meta.block,
+            created_tx: meta.tx_hash.clone(),
+            created_at: meta.timestamp,
+            issuance_stopped_at: None,
+            closed_at: None,
+        };
+        state.db.insert_series(&row).await?;
+        state
+            .db
+            .insert_order(
+                &row.issue_order_hash,
+                row.id,
+                Leg::Issue.as_str(),
+                &row.vault,
+            )
+            .await?;
+        state
+            .db
+            .insert_order(&row.exit_order_hash, row.id, Leg::Exit.as_str(), &row.vault)
+            .await?;
+        state
+            .db
+            .insert_order(
+                &row.settlement_order_hash,
+                row.id,
+                Leg::Settle.as_str(),
+                &row.vault,
+            )
+            .await?;
+        order_map.insert_series(
+            id,
+            ev.issueOrderHash,
+            ev.exitOrderHash,
+            ev.settlementOrderHash,
+        );
+        vaults.insert(ev.vault);
+        tracing::info!(id, writer = %row.writer, vault = %row.vault, receipt = %row.receipt, "SeriesCreated");
+        return Ok(());
+    }
+
+    if topic0 == VarianceSeriesFactory::Finalized::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<VarianceSeriesFactory::Finalized>()
+            .context("decode Finalized")?
+            .inner
+            .data;
+        let row = FinalizationRow {
+            series_id: sqlite_i64(
+                u64::try_from(ev.seriesId).context("series id")?,
+                "series id",
+            )?,
+            tx_hash: meta.tx_hash.clone(),
+            block: meta.block,
+            timestamp: meta.timestamp,
+            final_variance: ev.finalVariance.to_string(),
+            capped_variance: ev.cappedVariance.to_string(),
+            payout_per_unit: ev.payoutPerUnit.to_string(),
+            outstanding_units: ev.outstandingUnits.to_string(),
+            released_collateral: ev.releasedCollateral.to_string(),
+        };
+        tracing::info!(
+            series_id = row.series_id,
+            final_variance = %row.final_variance,
+            payout_per_unit = %row.payout_per_unit,
+            "Finalized"
+        );
+        state.db.insert_finalization(&row).await?;
+        return Ok(());
+    }
+
+    if topic0 == VarianceSeriesFactory::IssuanceStopped::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<VarianceSeriesFactory::IssuanceStopped>()
+            .context("decode IssuanceStopped")?
+            .inner
+            .data;
+        let id = sqlite_i64(
+            u64::try_from(ev.seriesId).context("series id")?,
+            "series id",
+        )?;
+        state.db.mark_issuance_stopped(id, meta.timestamp).await?;
+        tracing::info!(series_id = id, "IssuanceStopped");
+        return Ok(());
+    }
+
+    if topic0 == VarianceSeriesFactory::SeriesClosed::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<VarianceSeriesFactory::SeriesClosed>()
+            .context("decode SeriesClosed")?
+            .inner
+            .data;
+        let id = sqlite_i64(
+            u64::try_from(ev.seriesId).context("series id")?,
+            "series id",
+        )?;
+        state.db.mark_closed(id, meta.timestamp).await?;
+        tracing::info!(series_id = id, "SeriesClosed");
+        return Ok(());
+    }
+
+    // `Issued`, `Exited`, `Settled` and `WorthlessBurned` are the controller's own record of what a
+    // fill did. The fill row itself comes from the router's `Swapped`, which carries the order hash;
+    // these are logged for the record and left to the Lens for current state, so there is exactly one
+    // writer of the fills table.
+    if topic0 == VarianceSeriesFactory::WorthlessBurned::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<VarianceSeriesFactory::WorthlessBurned>()
+            .context("decode WorthlessBurned")?
+            .inner
+            .data;
+        tracing::info!(
+            series_id = %ev.seriesId,
+            holder = %ev.holder,
+            units = %ev.units,
+            "WorthlessBurned"
+        );
+    }
+    Ok(())
+}
+
+async fn process_swap(
+    state: &AppState,
+    order_map: &OrderMap,
+    log: &Log,
+    meta: &LogMeta,
+) -> Result<()> {
+    let ev = log
+        .log_decode::<AquaSwapVMRouter::Swapped>()
+        .context("decode Swapped")?
+        .inner
+        .data;
+    let Some((series_id, leg)) = order_map.lookup(&ev.orderHash) else {
+        tracing::debug!(order_hash = %ev.orderHash, "Swapped for an order that is not a Tremor leg; skipped");
+        return Ok(());
+    };
+    let (quote, units) = if leg.quote_is_amount_in() {
+        (ev.amountIn, ev.amountOut)
+    } else {
+        (ev.amountOut, ev.amountIn)
+    };
+    let row = FillRow {
+        tx_hash: meta.tx_hash.clone(),
+        log_index: meta.log_index,
+        block: meta.block,
+        timestamp: meta.timestamp,
+        series_id: sqlite_i64(series_id, "fill series id")?,
+        leg: leg.as_str().to_string(),
+        order_hash: hex_b256(ev.orderHash),
+        maker_vault: hex_addr(ev.maker),
+        taker: hex_addr(ev.taker),
+        token_in: hex_addr(ev.tokenIn),
+        token_out: hex_addr(ev.tokenOut),
+        amount_in: ev.amountIn.to_string(),
+        amount_out: ev.amountOut.to_string(),
+        units: units.to_string(),
+        quote_amount: quote.to_string(),
+        price_per_unit: price_per_unit(quote, units).to_string(),
+    };
+    tracing::info!(series_id, leg = leg.as_str(), taker = %row.taker, units = %row.units, quote = %quote, "Swapped");
+    state.db.insert_fill(&row).await?;
+    Ok(())
+}
+
+async fn process_aqua(
+    state: &AppState,
+    order_map: &OrderMap,
+    log: &Log,
+    topic0: B256,
+    meta: &LogMeta,
+) -> Result<()> {
+    let m = &state.manifest;
+    let (kind, maker, app, strategy_hash, token, amount, strategy) =
+        if topic0 == Aqua::Shipped::SIGNATURE_HASH {
+            let ev = log
+                .log_decode::<Aqua::Shipped>()
+                .context("decode Shipped")?
+                .inner
+                .data;
+            (
+                "shipped",
+                ev.maker,
+                ev.app,
+                ev.strategyHash,
+                None,
+                None,
+                Some(format!("{:#x}", ev.strategy)),
+            )
+        } else if topic0 == Aqua::Docked::SIGNATURE_HASH {
+            let ev = log
+                .log_decode::<Aqua::Docked>()
+                .context("decode Docked")?
+                .inner
+                .data;
+            (
+                "docked",
+                ev.maker,
+                ev.app,
+                ev.strategyHash,
+                None,
+                None,
+                None,
+            )
+        } else if topic0 == Aqua::Pulled::SIGNATURE_HASH {
+            let ev = log
+                .log_decode::<Aqua::Pulled>()
+                .context("decode Pulled")?
+                .inner
+                .data;
+            (
+                "pulled",
+                ev.maker,
+                ev.app,
+                ev.strategyHash,
+                Some(ev.token),
+                Some(ev.amount),
+                None,
+            )
+        } else if topic0 == Aqua::Pushed::SIGNATURE_HASH {
+            let ev = log
+                .log_decode::<Aqua::Pushed>()
+                .context("decode Pushed")?
+                .inner
+                .data;
+            (
+                "pushed",
+                ev.maker,
+                ev.app,
+                ev.strategyHash,
+                Some(ev.token),
+                Some(ev.amount),
+                None,
+            )
+        } else {
+            return Ok(());
+        };
+    if app != m.router {
+        return Ok(());
+    }
+    let mapped = order_map.lookup(&strategy_hash);
+    let row = AquaEventRow {
+        tx_hash: meta.tx_hash.clone(),
+        log_index: meta.log_index,
+        block: meta.block,
+        timestamp: meta.timestamp,
+        kind: kind.to_string(),
+        maker: hex_addr(maker),
+        app: hex_addr(app),
+        strategy_hash: hex_b256(strategy_hash),
+        series_id: mapped
+            .map(|(id, _)| sqlite_i64(id, "Aqua event series id"))
+            .transpose()?,
+        leg: mapped.map(|(_, leg)| leg.as_str().to_string()),
+        token: token.map(hex_addr),
+        amount: amount.map(|a| a.to_string()),
+        strategy,
+    };
+    tracing::debug!(kind, series_id = ?row.series_id, leg = ?row.leg, maker = %row.maker, "Aqua event");
+    state.db.insert_aqua_event(&row).await?;
+    Ok(())
+}
+
+async fn process_vault_log(
+    state: &AppState,
+    log: &Log,
+    ts_cache: &mut HashMap<u64, u64>,
+) -> Result<()> {
+    let Some(topic0) = log.inner.data.topics().first().copied() else {
+        return Ok(());
+    };
+    let meta = log_meta(state, log, ts_cache).await?;
+    let vault = hex_addr(log.inner.address);
+
+    let mut row = VaultEventRow {
+        tx_hash: meta.tx_hash.clone(),
+        log_index: meta.log_index,
+        block: meta.block,
+        timestamp: meta.timestamp,
+        vault: vault.clone(),
+        kind: String::new(),
+        actor: None,
+        amount: None,
+        balance: None,
+        locked: None,
+        reference: None,
+    };
+    let mut deposited_delta: Option<String> = None;
+    let mut withdrawn_delta: Option<String> = None;
+
+    if topic0 == TremorMakerVault::Deposited::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<TremorMakerVault::Deposited>()
+            .context("decode Deposited")?
+            .inner
+            .data;
+        row.kind = "deposited".into();
+        row.actor = Some(hex_addr(ev.payer));
+        row.amount = Some(ev.amount.to_string());
+        row.balance = Some(ev.newBalance.to_string());
+        row.locked = Some(ev.lockedBalance.to_string());
+        deposited_delta = Some(ev.amount.to_string());
+    } else if topic0 == TremorMakerVault::FreeWithdrawn::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<TremorMakerVault::FreeWithdrawn>()
+            .context("decode FreeWithdrawn")?
+            .inner
+            .data;
+        row.kind = "free_withdrawn".into();
+        row.actor = Some(hex_addr(ev.recipient));
+        row.amount = Some(ev.amount.to_string());
+        row.balance = Some(ev.newBalance.to_string());
+        row.locked = Some(ev.lockedBalance.to_string());
+        withdrawn_delta = Some(ev.amount.to_string());
+    } else if topic0 == TremorMakerVault::LockedIncreased::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<TremorMakerVault::LockedIncreased>()
+            .context("decode LockedIncreased")?
+            .inner
+            .data;
+        row.kind = "locked_increased".into();
+        row.amount = Some(ev.amount.to_string());
+        row.locked = Some(ev.lockedBalance.to_string());
+    } else if topic0 == TremorMakerVault::LockedDecreased::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<TremorMakerVault::LockedDecreased>()
+            .context("decode LockedDecreased")?
+            .inner
+            .data;
+        row.kind = "locked_decreased".into();
+        row.amount = Some(ev.amount.to_string());
+        row.locked = Some(ev.lockedBalance.to_string());
+    } else if topic0 == TremorMakerVault::ReceiptRegistered::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<TremorMakerVault::ReceiptRegistered>()
+            .context("decode ReceiptRegistered")?
+            .inner
+            .data;
+        row.kind = "receipt_registered".into();
+        row.reference = Some(hex_addr(ev.receipt));
+    } else if topic0 == TremorMakerVault::StrategyShipped::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<TremorMakerVault::StrategyShipped>()
+            .context("decode StrategyShipped")?
+            .inner
+            .data;
+        row.kind = "strategy_shipped".into();
+        row.reference = Some(hex_b256(ev.strategyHash));
+    } else if topic0 == TremorMakerVault::StrategyDocked::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<TremorMakerVault::StrategyDocked>()
+            .context("decode StrategyDocked")?
+            .inner
+            .data;
+        row.kind = "strategy_docked".into();
+        row.reference = Some(hex_b256(ev.strategyHash));
+    } else {
+        return Ok(());
+    }
+
+    state.db.insert_vault_event(&row).await?;
+    state
+        .db
+        .apply_vault_totals(
+            &vault,
+            deposited_delta.as_deref(),
+            withdrawn_delta.as_deref(),
+            row.balance.as_deref(),
+            row.locked.as_deref(),
+            meta.timestamp,
+        )
+        .await?;
+    tracing::debug!(vault = %vault, kind = %row.kind, "vault event");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunks_are_inclusive_and_capped() {
+        assert_eq!(
+            block_chunks(100, 5000, 2000),
+            vec![(100, 2099), (2100, 4099), (4100, 5000)]
+        );
+        assert_eq!(block_chunks(10, 10, 2000), vec![(10, 10)]);
+        assert_eq!(block_chunks(0, 1999, 2000), vec![(0, 1999)]);
+        assert_eq!(block_chunks(0, 2000, 2000), vec![(0, 1999), (2000, 2000)]);
+        assert!(block_chunks(50, 40, 2000).is_empty());
+        assert!(block_chunks(1, 5, 0).is_empty());
+        for (a, b) in block_chunks(7, 100_000, CHUNK_BLOCKS) {
+            assert!(b >= a && b - a < CHUNK_BLOCKS);
+        }
+        assert_eq!(
+            block_chunks(u64::MAX - 1, u64::MAX, 5),
+            vec![(u64::MAX - 1, u64::MAX)]
+        );
+    }
+
+    #[test]
+    fn an_order_hash_maps_to_a_series_and_one_of_three_legs() {
+        let mut m = OrderMap::default();
+        let (i0, e0, s0) = (
+            B256::repeat_byte(0x11),
+            B256::repeat_byte(0x12),
+            B256::repeat_byte(0x13),
+        );
+        let (i1, e1, s1) = (
+            B256::repeat_byte(0x21),
+            B256::repeat_byte(0x22),
+            B256::repeat_byte(0x23),
+        );
+        m.insert_series(1, i0, e0, s0);
+        m.insert_series(7, i1, e1, s1);
+        assert_eq!(m.lookup(&i0), Some((1, Leg::Issue)));
+        assert_eq!(m.lookup(&e0), Some((1, Leg::Exit)));
+        assert_eq!(m.lookup(&s0), Some((1, Leg::Settle)));
+        assert_eq!(m.lookup(&s1), Some((7, Leg::Settle)));
+        assert_eq!(m.lookup(&B256::repeat_byte(0x99)), None);
+        assert_eq!(m.series_count(), 2);
+    }
+
+    /// After a restart the order map is rebuilt from sqlite, not from a re-scan.
+    #[test]
+    fn the_order_map_rebuilds_from_stored_rows() {
+        let i0 = B256::repeat_byte(0x11);
+        let e0 = B256::repeat_byte(0x12);
+        let s0 = B256::repeat_byte(0x13);
+        let rows = vec![
+            (format!("{i0:#x}"), 3i64, "issue".to_string()),
+            (format!("{e0:#x}"), 3, "exit".to_string()),
+            (format!("{s0:#x}"), 3, "settle".to_string()),
+            ("not a hash".to_string(), 4, "issue".to_string()),
+            (
+                format!("{:#x}", B256::repeat_byte(0x44)),
+                5,
+                "bogus".to_string(),
+            ),
+        ];
+        let m = OrderMap::from_rows(&rows);
+        assert_eq!(m.lookup(&i0), Some((3, Leg::Issue)));
+        assert_eq!(m.lookup(&e0), Some((3, Leg::Exit)));
+        assert_eq!(m.lookup(&s0), Some((3, Leg::Settle)));
+        assert_eq!(
+            m.series_count(),
+            1,
+            "unparseable rows must not create series"
+        );
+    }
+
+    /// The quote side of a fill is `amountIn` for ISSUE and `amountOut` for the two burn legs. Getting
+    /// this backwards would report an exit as if the holder had paid for it.
+    #[test]
+    fn the_quote_side_depends_on_the_leg() {
+        assert!(Leg::Issue.quote_is_amount_in());
+        assert!(!Leg::Exit.quote_is_amount_in());
+        assert!(!Leg::Settle.quote_is_amount_in());
+    }
+
+    #[test]
+    fn leg_names_round_trip() {
+        for leg in [Leg::Issue, Leg::Exit, Leg::Settle] {
+            assert_eq!(Leg::parse(leg.as_str()), Some(leg));
+        }
+        assert_eq!(Leg::parse("premium"), None, "v1 leg names must not decode");
+        assert_eq!(Leg::parse("settlement"), None);
+    }
+
+    #[test]
+    fn price_per_unit_math() {
+        // 1000 USDC (1e9) for 2 units (2e18) -> 500 USDC per unit = 5e8
+        assert_eq!(
+            price_per_unit(
+                U256::from(1_000_000_000u64),
+                U256::from(2_000_000_000_000_000_000u128)
+            ),
+            U256::from(500_000_000u64)
+        );
+        assert_eq!(price_per_unit(U256::from(5), U256::ZERO), U256::ZERO);
+    }
+}
