@@ -1,0 +1,17 @@
+{
+  "name": "tremor-sim",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Scenario-based economic simulation of a Tremor v2 market",
+  "scripts": {
+    "sim": "tsx src/run.ts",
+    "check": "tsx src/check.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@types/node": "^26.4.1",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
+  }
+}
