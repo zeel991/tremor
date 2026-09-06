@@ -1,0 +1,173 @@
+"""
+A writer's protected Aqua maker. One per (writer, quote token), deployed deterministically by the
+controller and never upgradeable. This is where the collateral actually lives.
+"""
+type Vault @entity(immutable: false) {
+  id: Bytes!
+  writer: Bytes!
+  quoteToken: Bytes!
+  createdAt: BigInt!
+  createdBlock: BigInt!
+  transactionHash: Bytes!
+  "Running totals from the vault's own events. Current balances come from TremorLens, not from here."
+  totalDeposited: BigInt!
+  totalWithdrawn: BigInt!
+  "The last balance and lock the vault reported. Indexed history, not a live read."
+  lastReportedBalance: BigInt!
+  lastReportedLocked: BigInt!
+  updatedAt: BigInt!
+  series: [Series!]! @derivedFrom(field: "vault")
+  actions: [VaultAction!]! @derivedFrom(field: "vault")
+}
+
+"""
+One capped realized-variance receipt series. Immutable terms plus the lifecycle marks the controller
+emits; anything that changes continuously (locked collateral, the bid and ask, outstanding units) is
+read from TremorLens instead, because a subgraph cannot be the authority for an executable price.
+"""
+type Series @entity(immutable: false) {
+  id: ID!
+  writer: Bytes!
+  vault: Vault!
+  receipt: Bytes!
+  quoteToken: Bytes!
+  feed: Bytes!
+  issueOrderHash: Bytes!
+  exitOrderHash: Bytes!
+  settlementOrderHash: Bytes!
+  start: BigInt!
+  expiry: BigInt!
+  saleEnd: BigInt!
+  sampleInterval: BigInt!
+  unitNotional: BigInt!
+  capVariance: BigInt!
+  anchorVariance: BigInt!
+  impactPerUnit: BigInt!
+  halfLife: BigInt!
+  halfSpreadBps: BigInt!
+  maxUnits: BigInt!
+  createdAt: BigInt!
+  createdBlock: BigInt!
+  transactionHash: Bytes!
+
+  "Cumulative units, from the controller's own Issued/Exited/Settled/WorthlessBurned events."
+  unitsIssued: BigInt!
+  unitsExited: BigInt!
+  unitsSettled: BigInt!
+  unitsBurnedWorthless: BigInt!
+  "Cumulative quote-token flows, kept apart because issuance flows in and the burn legs flow out."
+  premiumCollected: BigInt!
+  exitPaid: BigInt!
+  settlementPaid: BigInt!
+  "The last outstanding/locked figures the controller reported. Indexed history, not a live read."
+  lastReportedOutstanding: BigInt!
+  lastReportedLocked: BigInt!
+
+  issuanceStoppedAt: BigInt
+  closedAt: BigInt
+  finalization: Finalization
+  "Latest checkpoint progress, so a client can tell at a glance whether the window is behind."
+  processedThrough: BigInt!
+  lastRoundId: BigInt!
+
+  orders: [Order!]! @derivedFrom(field: "series")
+  fills: [Fill!]! @derivedFrom(field: "series")
+  checkpoints: [Checkpoint!]! @derivedFrom(field: "series")
+  balances: [ReceiptBalance!]! @derivedFrom(field: "series")
+}
+
+"An Aqua strategy hash mapped to the series and leg it belongs to. Keyed by the order hash itself."
+type Order @entity(immutable: true) {
+  id: Bytes!
+  series: Series!
+  "issue | exit | settle"
+  leg: String!
+  maker: Bytes!
+}
+
+"Maps a receipt token to its series, so the receipt template can resolve itself."
+type ReceiptIndex @entity(immutable: true) {
+  id: Bytes!
+  series: Series!
+}
+
+"""
+One fill of one leg. `units` is always the receipt side and `quoteAmount` always the quote side,
+whichever direction the leg runs, so a chart does not have to know the leg to read a price.
+"""
+type Fill @entity(immutable: true) {
+  id: Bytes!
+  series: Series!
+  orderHash: Bytes!
+  leg: String!
+  makerVault: Bytes!
+  taker: Bytes!
+  tokenIn: Bytes!
+  tokenOut: Bytes!
+  amountIn: BigInt!
+  amountOut: BigInt!
+  units: BigInt!
+  quoteAmount: BigInt!
+  timestamp: BigInt!
+  block: BigInt!
+  transactionHash: Bytes!
+}
+
+"One bounded, permissionless step of the observation window."
+type Checkpoint @entity(immutable: true) {
+  id: Bytes!
+  series: Series!
+  fromSample: BigInt!
+  toSample: BigInt!
+  processedThrough: BigInt!
+  lastRoundId: BigInt!
+  sumSquaredReturns: BigInt!
+  caller: Bytes!
+  timestamp: BigInt!
+  block: BigInt!
+  transactionHash: Bytes!
+}
+
+"The moment a series' realized variance stopped being a projection."
+type Finalization @entity(immutable: true) {
+  id: ID!
+  series: Series!
+  finalVariance: BigInt!
+  cappedVariance: BigInt!
+  payoutPerUnit: BigInt!
+  outstandingUnits: BigInt!
+  releasedCollateral: BigInt!
+  caller: Bytes!
+  timestamp: BigInt!
+  block: BigInt!
+  transactionHash: Bytes!
+}
+
+"""
+Something that happened to a writer's vault: a deposit, a free withdrawal, a lock moving, or a
+strategy being shipped or docked. The writer-side audit trail.
+"""
+type VaultAction @entity(immutable: true) {
+  id: Bytes!
+  vault: Vault!
+  "deposited | freeWithdrawn | lockedIncreased | lockedDecreased | receiptRegistered | strategyShipped | strategyDocked"
+  kind: String!
+  actor: Bytes
+  amount: BigInt
+  balance: BigInt
+  locked: BigInt
+  reference: Bytes
+  timestamp: BigInt!
+  block: BigInt!
+  transactionHash: Bytes!
+}
+
+"Receipt units held by an account, tracked from ERC-20 transfers including mints and burns."
+type ReceiptBalance @entity(immutable: false) {
+  id: Bytes!
+  series: Series!
+  account: Bytes!
+  receipt: Bytes!
+  units: BigInt!
+  updatedAt: BigInt!
+}
