@@ -1,0 +1,16 @@
+{
+  "base-sepolia": {
+    "Controller": {
+      "address": "0xc207A9dce6e46F453e3b6b780408B7b8190485c2",
+      "startBlock": 46571551
+    },
+    "Accumulator": {
+      "address": "0x273E1F120B3B03217B69769A9eDBFe67d5c3bCEe",
+      "startBlock": 46571551
+    },
+    "Router": {
+      "address": "0xb8dcED3Cf6266Dd8fEc05849fce3734B79A7e722",
+      "startBlock": 46571551
+    }
+  }
+}

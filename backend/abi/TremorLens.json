@@ -1,0 +1,1313 @@
+[
+  {
+    "type": "constructor",
+    "inputs": [
+      {
+        "name": "factory",
+        "type": "address",
+        "internalType": "contract VarianceSeriesFactory"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "ACCUMULATOR",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract IVarianceAccumulator"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "AQUA",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract IAqua"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "ENGINE",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract TremorMarketEngine"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "FACTORY",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract VarianceSeriesFactory"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "ROUTER",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "buildTakerData",
+    "inputs": [
+      {
+        "name": "taker",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "isExactIn",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "isAToB",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "thresholdAmount",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "deadline",
+        "type": "uint40",
+        "internalType": "uint40"
+      },
+      {
+        "name": "allowPartialFill",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "stateMutability": "pure"
+  },
+  {
+    "type": "function",
+    "name": "legDirection",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "leg",
+        "type": "uint8",
+        "internalType": "enum Leg"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "isAToB",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "lvrHedgeUnits",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "poolValueQuote",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "horizonSeconds",
+        "type": "uint40",
+        "internalType": "uint40"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "priceAt",
+    "inputs": [
+      {
+        "name": "feed",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "t",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "answer",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "roundId",
+        "type": "uint80",
+        "internalType": "uint80"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "quoteExitExactIn",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "units",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "filledUnits",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "quoteOut",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "quoteIssueExactIn",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "quoteIn",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "units",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "premium",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "quoteIssueExactOut",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "units",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "filledUnits",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "premium",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "quoteSettleExactIn",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "units",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "filledUnits",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "quoteOut",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "realizedVariance",
+    "inputs": [
+      {
+        "name": "feed",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "start",
+        "type": "uint40",
+        "internalType": "uint40"
+      },
+      {
+        "name": "end",
+        "type": "uint40",
+        "internalType": "uint40"
+      },
+      {
+        "name": "interval",
+        "type": "uint32",
+        "internalType": "uint32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "rv",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "samples",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "samplePrices",
+    "inputs": [
+      {
+        "name": "feed",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "start",
+        "type": "uint40",
+        "internalType": "uint40"
+      },
+      {
+        "name": "end",
+        "type": "uint40",
+        "internalType": "uint40"
+      },
+      {
+        "name": "interval",
+        "type": "uint32",
+        "internalType": "uint32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "prices",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      },
+      {
+        "name": "roundIds",
+        "type": "uint80[]",
+        "internalType": "uint80[]"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "state",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "s",
+        "type": "tuple",
+        "internalType": "struct TremorLens.SeriesState",
+        "components": [
+          {
+            "name": "id",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "writer",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "vault",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "receipt",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "params",
+            "type": "tuple",
+            "internalType": "struct SeriesParams",
+            "components": [
+              {
+                "name": "feed",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "quoteToken",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "start",
+                "type": "uint40",
+                "internalType": "uint40"
+              },
+              {
+                "name": "expiry",
+                "type": "uint40",
+                "internalType": "uint40"
+              },
+              {
+                "name": "saleEnd",
+                "type": "uint40",
+                "internalType": "uint40"
+              },
+              {
+                "name": "sampleInterval",
+                "type": "uint32",
+                "internalType": "uint32"
+              },
+              {
+                "name": "unitNotional",
+                "type": "uint128",
+                "internalType": "uint128"
+              },
+              {
+                "name": "capVariance",
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "anchorVariance",
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "impactPerUnit",
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "halfLife",
+                "type": "uint32",
+                "internalType": "uint32"
+              },
+              {
+                "name": "halfSpreadBps",
+                "type": "uint16",
+                "internalType": "uint16"
+              },
+              {
+                "name": "maxUnits",
+                "type": "uint128",
+                "internalType": "uint128"
+              }
+            ]
+          },
+          {
+            "name": "issueOrderHash",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "exitOrderHash",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "settlementOrderHash",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "status",
+            "type": "uint8",
+            "internalType": "enum TremorLens.Status"
+          },
+          {
+            "name": "legs",
+            "type": "tuple",
+            "internalType": "struct TremorLens.LegStatus",
+            "components": [
+              {
+                "name": "issuanceOpen",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "exitOpen",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "settleOpen",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "issueLegActive",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "exitLegActive",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "settleLegActive",
+                "type": "bool",
+                "internalType": "bool"
+              }
+            ]
+          },
+          {
+            "name": "quote",
+            "type": "tuple",
+            "internalType": "struct TremorLens.MarketQuote",
+            "components": [
+              {
+                "name": "marketVariance",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "projectedVariance",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "realizedVarianceSoFar",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "bidVariance",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "askVariance",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "bidPerUnit",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "askPerUnit",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "maxPayoutPerUnit",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ]
+          },
+          {
+            "name": "unitsOutstanding",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "unitsAvailable",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "lockedLiability",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "finalVariance",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "payoutPerUnit",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "oracle",
+            "type": "tuple",
+            "internalType": "struct TremorLens.OracleProgress",
+            "components": [
+              {
+                "name": "samplesStored",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "samplesAvailable",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "samplesTotal",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "processedThrough",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "checkpointsCurrent",
+                "type": "bool",
+                "internalType": "bool"
+              }
+            ]
+          },
+          {
+            "name": "fullyCollateralized",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "vaultState",
+            "type": "tuple",
+            "internalType": "struct TremorLens.VaultState",
+            "components": [
+              {
+                "name": "vault",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "owner",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "balance",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "locked",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "free",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "aquaAllowance",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "allowanceSufficient",
+                "type": "bool",
+                "internalType": "bool"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "states",
+    "inputs": [
+      {
+        "name": "from",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "to",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "type": "tuple[]",
+        "internalType": "struct TremorLens.SeriesState[]",
+        "components": [
+          {
+            "name": "id",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "writer",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "vault",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "receipt",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "params",
+            "type": "tuple",
+            "internalType": "struct SeriesParams",
+            "components": [
+              {
+                "name": "feed",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "quoteToken",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "start",
+                "type": "uint40",
+                "internalType": "uint40"
+              },
+              {
+                "name": "expiry",
+                "type": "uint40",
+                "internalType": "uint40"
+              },
+              {
+                "name": "saleEnd",
+                "type": "uint40",
+                "internalType": "uint40"
+              },
+              {
+                "name": "sampleInterval",
+                "type": "uint32",
+                "internalType": "uint32"
+              },
+              {
+                "name": "unitNotional",
+                "type": "uint128",
+                "internalType": "uint128"
+              },
+              {
+                "name": "capVariance",
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "anchorVariance",
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "impactPerUnit",
+                "type": "uint64",
+                "internalType": "uint64"
+              },
+              {
+                "name": "halfLife",
+                "type": "uint32",
+                "internalType": "uint32"
+              },
+              {
+                "name": "halfSpreadBps",
+                "type": "uint16",
+                "internalType": "uint16"
+              },
+              {
+                "name": "maxUnits",
+                "type": "uint128",
+                "internalType": "uint128"
+              }
+            ]
+          },
+          {
+            "name": "issueOrderHash",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "exitOrderHash",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "settlementOrderHash",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "status",
+            "type": "uint8",
+            "internalType": "enum TremorLens.Status"
+          },
+          {
+            "name": "legs",
+            "type": "tuple",
+            "internalType": "struct TremorLens.LegStatus",
+            "components": [
+              {
+                "name": "issuanceOpen",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "exitOpen",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "settleOpen",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "issueLegActive",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "exitLegActive",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "settleLegActive",
+                "type": "bool",
+                "internalType": "bool"
+              }
+            ]
+          },
+          {
+            "name": "quote",
+            "type": "tuple",
+            "internalType": "struct TremorLens.MarketQuote",
+            "components": [
+              {
+                "name": "marketVariance",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "projectedVariance",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "realizedVarianceSoFar",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "bidVariance",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "askVariance",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "bidPerUnit",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "askPerUnit",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "maxPayoutPerUnit",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ]
+          },
+          {
+            "name": "unitsOutstanding",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "unitsAvailable",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "lockedLiability",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "finalVariance",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "payoutPerUnit",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "oracle",
+            "type": "tuple",
+            "internalType": "struct TremorLens.OracleProgress",
+            "components": [
+              {
+                "name": "samplesStored",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "samplesAvailable",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "samplesTotal",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "processedThrough",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "checkpointsCurrent",
+                "type": "bool",
+                "internalType": "bool"
+              }
+            ]
+          },
+          {
+            "name": "fullyCollateralized",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "vaultState",
+            "type": "tuple",
+            "internalType": "struct TremorLens.VaultState",
+            "components": [
+              {
+                "name": "vault",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "owner",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "balance",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "locked",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "free",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "aquaAllowance",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "allowanceSufficient",
+                "type": "bool",
+                "internalType": "bool"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "vaultState",
+    "inputs": [
+      {
+        "name": "vault",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "vs",
+        "type": "tuple",
+        "internalType": "struct TremorLens.VaultState",
+        "components": [
+          {
+            "name": "vault",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "owner",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "balance",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "locked",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "free",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "aquaAllowance",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "allowanceSufficient",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "volatilityPct",
+    "inputs": [
+      {
+        "name": "variance",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "pure"
+  },
+  {
+    "type": "function",
+    "name": "writerVault",
+    "inputs": [
+      {
+        "name": "writer",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "vault",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "exists",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "vs",
+        "type": "tuple",
+        "internalType": "struct TremorLens.VaultState",
+        "components": [
+          {
+            "name": "vault",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "owner",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "balance",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "locked",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "free",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "aquaAllowance",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "allowanceSufficient",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "error",
+    "name": "BadLensConfiguration",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "FeedDecimalsUnsupported",
+    "inputs": [
+      {
+        "name": "decimals",
+        "type": "uint8",
+        "internalType": "uint8"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "InvalidAnswer",
+    "inputs": [
+      {
+        "name": "feed",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "roundId",
+        "type": "uint80",
+        "internalType": "uint80"
+      },
+      {
+        "name": "answer",
+        "type": "int256",
+        "internalType": "int256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "InvalidWindow",
+    "inputs": [
+      {
+        "name": "start",
+        "type": "uint40",
+        "internalType": "uint40"
+      },
+      {
+        "name": "end",
+        "type": "uint40",
+        "internalType": "uint40"
+      },
+      {
+        "name": "interval",
+        "type": "uint32",
+        "internalType": "uint32"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "SafeCastOverflowedUintDowncast",
+    "inputs": [
+      {
+        "name": "bits",
+        "type": "uint8",
+        "internalType": "uint8"
+      },
+      {
+        "name": "value",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "TakerTraitsMissingHasPreTransferInFlag",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "TakerTraitsMissingHasPreTransferOutFlag",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "TakerTraitsThresholdLengthInvalid",
+    "inputs": [
+      {
+        "name": "threshold",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "WindowInFuture",
+    "inputs": [
+      {
+        "name": "end",
+        "type": "uint40",
+        "internalType": "uint40"
+      },
+      {
+        "name": "nowTs",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "WindowPredatesFeed",
+    "inputs": [
+      {
+        "name": "feed",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "t",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  }
+]

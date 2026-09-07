@@ -1,0 +1,28 @@
+# secrets
+.env
+.env.*
+!.env.example
+# contracts
+contracts/out/
+contracts/cache/
+contracts/broadcast/**/dry-run/
+contracts/lib/swap-vm/node_modules/
+contracts/lib/swap-vm/out/
+contracts/lib/swap-vm/cache/
+# backend
+backend/target/
+backend/*.db
+backend/*.db-*
+# subgraph (graph-cli generates all three; none belong in git)
+subgraph/node_modules/
+subgraph/generated/
+subgraph/build/
+# web
+web/node_modules/
+web/.next/
+web/out/
+web/next-env.d.ts
+# misc
+.DS_Store
+*.log
+.dev-logs/
