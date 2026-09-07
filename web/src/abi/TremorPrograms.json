@@ -1,0 +1,340 @@
+[
+  {
+    "type": "constructor",
+    "inputs": [
+      {
+        "name": "factory",
+        "type": "address",
+        "internalType": "contract VarianceSeriesFactory"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "ENGINE",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "FACTORY",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract VarianceSeriesFactory"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "order",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "leg",
+        "type": "uint8",
+        "internalType": "enum Leg"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct ISwapVM.Order",
+        "components": [
+          {
+            "name": "maker",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "traits",
+            "type": "uint256",
+            "internalType": "MakerTraits"
+          },
+          {
+            "name": "data",
+            "type": "bytes",
+            "internalType": "bytes"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "orders",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "issue",
+        "type": "tuple",
+        "internalType": "struct ISwapVM.Order",
+        "components": [
+          {
+            "name": "maker",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "traits",
+            "type": "uint256",
+            "internalType": "MakerTraits"
+          },
+          {
+            "name": "data",
+            "type": "bytes",
+            "internalType": "bytes"
+          }
+        ]
+      },
+      {
+        "name": "exit",
+        "type": "tuple",
+        "internalType": "struct ISwapVM.Order",
+        "components": [
+          {
+            "name": "maker",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "traits",
+            "type": "uint256",
+            "internalType": "MakerTraits"
+          },
+          {
+            "name": "data",
+            "type": "bytes",
+            "internalType": "bytes"
+          }
+        ]
+      },
+      {
+        "name": "settlement",
+        "type": "tuple",
+        "internalType": "struct ISwapVM.Order",
+        "components": [
+          {
+            "name": "maker",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "traits",
+            "type": "uint256",
+            "internalType": "MakerTraits"
+          },
+          {
+            "name": "data",
+            "type": "bytes",
+            "internalType": "bytes"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "program",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "leg",
+        "type": "uint8",
+        "internalType": "enum Leg"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "shipPlan",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "strategies",
+        "type": "bytes[]",
+        "internalType": "bytes[]"
+      },
+      {
+        "name": "tokens",
+        "type": "address[]",
+        "internalType": "address[]"
+      },
+      {
+        "name": "amounts",
+        "type": "uint256[][]",
+        "internalType": "uint256[][]"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "error",
+    "name": "BadProgramsConfiguration",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InstructionBuilderArgsLengthExceeded",
+    "inputs": [
+      {
+        "name": "length",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "MakerTraitsMissingHasPostTransferInFlag",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "MakerTraitsMissingHasPostTransferOutFlag",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "MakerTraitsMissingHasPreTransferInFlag",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "MakerTraitsMissingHasPreTransferOutFlag",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "MakerTraitsTokensNotSorted",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "MemoryPtrAllocTooMuch",
+    "inputs": [
+      {
+        "name": "size",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "MemoryPtrBaseMismatch",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "MemoryPtr"
+      },
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "MemoryPtr"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "MemoryPtrSkipTooMuch",
+    "inputs": [
+      {
+        "name": "size",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "MemoryPtrStrictResolveFailed",
+    "inputs": [
+      {
+        "name": "end",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "current",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "MemoryPtrWriteOutOfBounds",
+    "inputs": [
+      {
+        "name": "end",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "current",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "SafeCastOverflowedUintDowncast",
+    "inputs": [
+      {
+        "name": "bits",
+        "type": "uint8",
+        "internalType": "uint8"
+      },
+      {
+        "name": "value",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  }
+]
