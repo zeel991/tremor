@@ -1,0 +1,7 @@
+swap-vm/=lib/swap-vm/src/
+@1inch/swap-vm/=lib/swap-vm/
+forge-std/=lib/swap-vm/node_modules/forge-std/src/
+@openzeppelin/contracts/=lib/swap-vm/node_modules/@openzeppelin/contracts/
+@1inch/solidity-utils/=lib/swap-vm/node_modules/@1inch/solidity-utils/
+@1inch/aqua/=lib/swap-vm/node_modules/@1inch/aqua/
+solady/=lib/solady/
