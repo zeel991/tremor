@@ -90,6 +90,8 @@ async fn main() -> anyhow::Result<()> {
         ("aqua", manifest.aqua),
         ("usdc", manifest.usdc),
         ("feed", manifest.feed),
+        ("portfolioMarket", manifest.portfolio_market),
+        ("portfolioAccumulator", manifest.portfolio_accumulator),
     ] {
         let code = provider
             .get_code_at(address)

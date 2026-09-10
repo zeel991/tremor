@@ -68,10 +68,10 @@ contract PortfolioDemoFlow is Script {
             capVariance: 1e18,
             capPayoutPerUnit: S,
             maxUnitsPerSide: 1000e18,
-            askHigh: 0.30e6,
+            askHigh: 0.3e6,
             bidHigh: 0.25e6,
             askCalm: 0.75e6,
-            bidCalm: 0.70e6
+            bidCalm: 0.7e6
         });
     }
 
@@ -110,7 +110,8 @@ contract PortfolioDemoFlow is Script {
         address buyer = vm.addr(pk);
         vm.startBroadcast(pk);
         e.usdc.approve(address(e.router), type(uint256).max);
-        (premium,,) = e.router.swap(e.market.orderFor(gid, mode), units, _takerData(buyer, false, address(e.usdc) < receipt));
+        (premium,,) =
+            e.router.swap(e.market.orderFor(gid, mode), units, _takerData(buyer, false, address(e.usdc) < receipt));
         vm.stopBroadcast();
     }
 
@@ -129,9 +130,11 @@ contract PortfolioDemoFlow is Script {
         TremorMakerVault vault = TremorMakerVault(e.market.createVault());
         e.usdc.approve(address(vault), type(uint256).max);
         vault.deposit(100e6);
-        uint256 gid = e.market.createGroup(
-            address(vault), _params(e, uint40(block.timestamp), uint40(block.timestamp + 7 days), uint40(block.timestamp + 7 days))
-        );
+        uint256 gid = e.market
+            .createGroup(
+                address(vault),
+                _params(e, uint40(block.timestamp), uint40(block.timestamp + 7 days), uint40(block.timestamp + 7 days))
+            );
         vm.stopBroadcast();
 
         TremorPortfolioMarket.GroupView memory v = e.market.groupView(gid);
@@ -157,7 +160,9 @@ contract PortfolioDemoFlow is Script {
         require(premium == 75e6, "P3: premium");
         require(v.reserveLocked == 100e6, "P3: the reserve did not move");
         require(v.standaloneCaps == 200e6, "P3: separate backing would be double");
-        console2.log("P3  +100 CALM: reserve still", v.reserveLocked, "- separately backed would lock", v.standaloneCaps);
+        console2.log(
+            "P3  +100 CALM: reserve still", v.reserveLocked, "- separately backed would lock", v.standaloneCaps
+        );
     }
 
     function stageP4() external {
@@ -206,9 +211,12 @@ contract PortfolioDemoFlow is Script {
         address buyer = vm.addr(PK_BUYER1);
         vm.startBroadcast(PK_BUYER1);
         VarianceReceipt(v.highReceipt).approve(address(e.router), type(uint256).max);
-        (, uint256 got,) = e.router.swap(
-            e.market.orderFor(gid, POB.PMode.EXIT_HIGH), 20e18, _takerData(buyer, true, v.highReceipt < address(e.usdc))
-        );
+        (, uint256 got,) = e.router
+            .swap(
+                e.market.orderFor(gid, POB.PMode.EXIT_HIGH),
+                20e18,
+                _takerData(buyer, true, v.highReceipt < address(e.usdc))
+            );
         vm.stopBroadcast();
 
         v = e.market.groupView(gid);
@@ -225,9 +233,10 @@ contract PortfolioDemoFlow is Script {
         vm.startBroadcast(PK_WRITER);
         TremorMakerVault vault = TremorMakerVault(e.market.createVault());
         vault.deposit(100e6);
-        uint256 gid = e.market.createBackdatedDemoGroup(
-            address(vault), _params(e, uint40(expiry - 5 days), expiry, uint40(block.timestamp + 1 hours))
-        );
+        uint256 gid = e.market
+            .createBackdatedDemoGroup(
+                address(vault), _params(e, uint40(expiry - 5 days), expiry, uint40(block.timestamp + 1 hours))
+            );
         vm.stopBroadcast();
 
         _buy(e, PK_BUYER1, gid, true, 100e18);
@@ -255,22 +264,24 @@ contract PortfolioDemoFlow is Script {
         if (v.highPpu > 0) {
             vm.startBroadcast(PK_BUYER1);
             VarianceReceipt(v.highReceipt).approve(address(e.router), type(uint256).max);
-            (, uint256 outH,) = e.router.swap(
-                e.market.orderFor(gid, POB.PMode.SETTLE_HIGH),
-                100e18,
-                _takerData(vm.addr(PK_BUYER1), true, v.highReceipt < address(e.usdc))
-            );
+            (, uint256 outH,) = e.router
+                .swap(
+                    e.market.orderFor(gid, POB.PMode.SETTLE_HIGH),
+                    100e18,
+                    _takerData(vm.addr(PK_BUYER1), true, v.highReceipt < address(e.usdc))
+                );
             vm.stopBroadcast();
             payout += outH;
         }
         if (v.calmPpu > 0) {
             vm.startBroadcast(PK_BUYER2);
             VarianceReceipt(v.calmReceipt).approve(address(e.router), type(uint256).max);
-            (, uint256 outC,) = e.router.swap(
-                e.market.orderFor(gid, POB.PMode.SETTLE_CALM),
-                100e18,
-                _takerData(vm.addr(PK_BUYER2), true, v.calmReceipt < address(e.usdc))
-            );
+            (, uint256 outC,) = e.router
+                .swap(
+                    e.market.orderFor(gid, POB.PMode.SETTLE_CALM),
+                    100e18,
+                    _takerData(vm.addr(PK_BUYER2), true, v.calmReceipt < address(e.usdc))
+                );
             vm.stopBroadcast();
             payout += outC;
         }

@@ -94,10 +94,10 @@ contract PortfolioForkE2ETest is Test {
             capVariance: 1e18,
             capPayoutPerUnit: S,
             maxUnitsPerSide: 1000e18,
-            askHigh: 0.30e6,
+            askHigh: 0.3e6,
             bidHigh: 0.25e6,
             askCalm: 0.75e6,
-            bidCalm: 0.70e6
+            bidCalm: 0.7e6
         });
 
         vm.startPrank(writer);
@@ -170,10 +170,14 @@ contract PortfolioForkE2ETest is Test {
         v = market.groupView(gid);
 
         vm.startPrank(buyerHigh);
-        router.swap(market.orderFor(gid, POB.PMode.ISSUE_HIGH), 100e18, takerData(buyerHigh, false, USDC < v.highReceipt));
+        router.swap(
+            market.orderFor(gid, POB.PMode.ISSUE_HIGH), 100e18, takerData(buyerHigh, false, USDC < v.highReceipt)
+        );
         vm.stopPrank();
         vm.startPrank(buyerCalm);
-        router.swap(market.orderFor(gid, POB.PMode.ISSUE_CALM), 100e18, takerData(buyerCalm, false, USDC < v.calmReceipt));
+        router.swap(
+            market.orderFor(gid, POB.PMode.ISSUE_CALM), 100e18, takerData(buyerCalm, false, USDC < v.calmReceipt)
+        );
         vm.stopPrank();
 
         // ---- a stranger walks the real 61-point window in bounded checkpoints and finalizes

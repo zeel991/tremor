@@ -106,6 +106,8 @@ pub struct Manifest {
     pub programs: Address,
     pub lens: Address,
     pub oracle: Address,
+    pub portfolio_market: Address,
+    pub portfolio_accumulator: Address,
     pub deployment_block: u64,
     #[serde(default)]
     pub writer: Option<Address>,
@@ -134,7 +136,7 @@ impl Manifest {
             ),
         }
         let m: Self =
-            serde_json::from_value(raw).context("manifest does not match the v2 shape")?;
+            serde_json::from_value(raw).context("manifest does not match the v3 shape")?;
         m.validate()?;
         Ok(m)
     }
@@ -142,7 +144,7 @@ impl Manifest {
     /// Every address the backend will actually call must be non-zero. The plan's example manifest is
     /// all zeroes on purpose, and it must fail readiness rather than start and then fail per request.
     fn validate(&self) -> Result<()> {
-        let required: [(&str, Address); 10] = [
+        let required: [(&str, Address); 12] = [
             ("aqua", self.aqua),
             ("router", self.router),
             ("usdc", self.usdc),
@@ -153,6 +155,8 @@ impl Manifest {
             ("seriesDeployer", self.series_deployer),
             ("programs", self.programs),
             ("lens", self.lens),
+            ("portfolioMarket", self.portfolio_market),
+            ("portfolioAccumulator", self.portfolio_accumulator),
         ];
         let zeroed: Vec<&str> = required
             .iter()
@@ -192,22 +196,25 @@ mod tests {
         f
     }
 
-    fn v2_manifest() -> String {
+    fn v3_manifest() -> String {
         let a = "0x1111111111111111111111111111111111111111";
         format!(
             r#"{{"schemaVersion":3,"chainId":31337,"aqua":"{a}","router":"{a}","weth":"{a}",
             "usdc":"{a}","feed":"{a}","seriesFactory":"{a}","marketEngine":"{a}","accumulator":"{a}",
-            "seriesDeployer":"{a}","programs":"{a}","lens":"{a}","oracle":"{a}","deploymentBlock":7}}"#
+            "seriesDeployer":"{a}","programs":"{a}","lens":"{a}","oracle":"{a}",
+            "portfolioMarket":"{a}","portfolioAccumulator":"{a}","deploymentBlock":7}}"#
         )
     }
 
     #[test]
-    fn v2_manifest_loads() {
-        let f = write_temp(&v2_manifest());
+    fn v3_manifest_loads() {
+        let f = write_temp(&v3_manifest());
         let m = Manifest::load(f.path()).unwrap();
         assert_eq!(m.schema_version, 3);
         assert_eq!(m.chain_id, 31_337);
         assert_eq!(m.deployment_block, 7);
+        assert!(!m.portfolio_market.is_zero());
+        assert!(!m.portfolio_accumulator.is_zero());
     }
 
     #[test]
@@ -224,14 +231,14 @@ mod tests {
 
     #[test]
     fn a_future_schema_is_rejected() {
-        let f = write_temp(&v2_manifest().replace("\"schemaVersion\":3", "\"schemaVersion\":4"));
+        let f = write_temp(&v3_manifest().replace("\"schemaVersion\":3", "\"schemaVersion\":4"));
         let err = Manifest::load(f.path()).unwrap_err().to_string();
         assert!(err.contains("schemaVersion 4"), "unexpected error: {err}");
     }
 
     #[test]
     fn zero_addresses_fail_readiness() {
-        let f = write_temp(&v2_manifest().replace(
+        let f = write_temp(&v3_manifest().replace(
             "\"lens\":\"0x1111111111111111111111111111111111111111\"",
             "\"lens\":\"0x0000000000000000000000000000000000000000\"",
         ));
