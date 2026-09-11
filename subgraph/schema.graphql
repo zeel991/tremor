@@ -171,3 +171,61 @@ type ReceiptBalance @entity(immutable: false) {
   units: BigInt!
   updatedAt: BigInt!
 }
+
+"""
+One portfolio risk group backing complementary HIGH and CALM volatility receipts.
+"""
+type PortfolioGroup @entity(immutable: false) {
+  id: ID!
+  groupId: BigInt!
+  writer: Bytes!
+  vault: Bytes!
+  highReceipt: Bytes!
+  calmReceipt: Bytes!
+  feed: Bytes!
+  quoteToken: Bytes!
+  start: BigInt!
+  expiry: BigInt!
+  saleEnd: BigInt!
+  sampleInterval: BigInt!
+  capVariance: BigInt!
+  capPayoutPerUnit: BigInt!
+  maxUnitsPerSide: BigInt!
+  askHigh: BigInt!
+  bidHigh: BigInt!
+  askCalm: BigInt!
+  bidCalm: BigInt!
+  highOutstanding: BigInt!
+  calmOutstanding: BigInt!
+  reserveLocked: BigInt!
+  exitBuffer: BigInt!
+  finalized: Boolean!
+  finalVariance: BigInt
+  highPpu: BigInt
+  calmPpu: BigInt
+  createdBlock: BigInt!
+  createdTx: Bytes!
+  createdAt: BigInt!
+  updatedAt: BigInt!
+  events: [PortfolioEvent!]! @derivedFrom(field: "group")
+}
+
+"""
+An event on a portfolio risk group: issuance, exit, settlement, buffer funding/withdrawal, worthless burn, or finalization.
+"""
+type PortfolioEvent @entity(immutable: true) {
+  id: Bytes!
+  group: PortfolioGroup!
+  eventType: String!
+  actor: Bytes
+  side: String
+  units: BigInt!
+  amount: BigInt!
+  newOutstanding: BigInt
+  newReserve: BigInt
+  newBuffer: BigInt
+  blockNumber: BigInt!
+  txHash: Bytes!
+  logIndex: BigInt!
+  timestamp: BigInt!
+}

@@ -2,140 +2,174 @@ specVersion: 1.3.0
 schema:
   file: ./schema.graphql
 dataSources:
-  - kind: ethereum
-    name: Controller
-    network: base-sepolia
-    source:
-      abi: Controller
-      address: "0xc207A9dce6e46F453e3b6b780408B7b8190485c2"
-      startBlock: 46571551
-    mapping:
-      kind: ethereum/events
-      apiVersion: 0.0.9
-      language: wasm/assemblyscript
-      entities:
-        - Vault
-        - Series
-        - Order
-        - ReceiptIndex
-        - Finalization
-        - ReceiptBalance
-      abis:
-        - name: Controller
-          file: ./abis/Controller.json
-      eventHandlers:
-        - event: VaultCreated(indexed address,indexed address,address)
-          handler: handleVaultCreated
-        - event: SeriesCreated(indexed uint256,indexed address,indexed
-            address,address,bytes32,bytes32,bytes32,(address,address,uint40,uint40,uint40,uint32,uint128,uint64,uint64,uint64,uint32,uint16,uint128))
-          handler: handleSeriesCreated
-        - event: Issued(indexed uint256,indexed address,uint256,uint256,uint256,uint256)
-          handler: handleIssued
-        - event: Exited(indexed uint256,indexed address,uint256,uint256,uint256,uint256)
-          handler: handleExited
-        - event: Settled(indexed uint256,indexed address,uint256,uint256,uint256,uint256)
-          handler: handleSettled
-        - event: Finalized(indexed uint256,uint256,uint256,uint256,uint256,uint256)
-          handler: handleFinalized
-        - event: IssuanceStopped(indexed uint256,indexed address)
-          handler: handleIssuanceStopped
-        - event: WorthlessBurned(indexed uint256,indexed address,uint256)
-          handler: handleWorthlessBurned
-        - event: SeriesClosed(indexed uint256,uint256,uint256)
-          handler: handleSeriesClosed
-      file: ./src/controller.ts
-  - kind: ethereum
-    name: Accumulator
-    network: base-sepolia
-    source:
-      abi: Accumulator
-      address: "0x273E1F120B3B03217B69769A9eDBFe67d5c3bCEe"
-      startBlock: 46571551
-    mapping:
-      kind: ethereum/events
-      apiVersion: 0.0.9
-      language: wasm/assemblyscript
-      entities:
-        - Series
-        - Checkpoint
-      abis:
-        - name: Accumulator
-          file: ./abis/Accumulator.json
-      eventHandlers:
-        - event: Checkpointed(indexed uint256,uint256,uint256,uint40,uint80,uint256)
-          handler: handleCheckpointed
-      file: ./src/accumulator.ts
-  - kind: ethereum
-    name: Router
-    network: base-sepolia
-    source:
-      abi: Router
-      address: "0xb8dcED3Cf6266Dd8fEc05849fce3734B79A7e722"
-      startBlock: 46571551
-    mapping:
-      kind: ethereum/events
-      apiVersion: 0.0.9
-      language: wasm/assemblyscript
-      entities:
-        - Series
-        - Fill
-        - Order
-      abis:
-        - name: Router
-          file: ./abis/Router.json
-      eventHandlers:
-        - event: Swapped(bytes32,address,address,address,address,uint256,uint256)
-          handler: handleSwapped
-      file: ./src/router.ts
+- kind: ethereum
+  name: Controller
+  network: base-sepolia
+  source:
+    abi: Controller
+    address: '0xC86Cf4AD22ABD7169458cCDc58c51e71f23586f2'
+    startBlock: 46685189
+  mapping:
+    kind: ethereum/events
+    apiVersion: 0.0.9
+    language: wasm/assemblyscript
+    entities:
+    - Vault
+    - Series
+    - Order
+    - ReceiptIndex
+    - Finalization
+    - ReceiptBalance
+    abis:
+    - name: Controller
+      file: ./abis/Controller.json
+    eventHandlers:
+    - event: VaultCreated(indexed address,indexed address,address)
+      handler: handleVaultCreated
+    - event: SeriesCreated(indexed uint256,indexed address,indexed address,address,bytes32,bytes32,bytes32,(address,address,uint40,uint40,uint40,uint32,uint128,uint64,uint64,uint64,uint32,uint16,uint128))
+      handler: handleSeriesCreated
+    - event: Issued(indexed uint256,indexed address,uint256,uint256,uint256,uint256)
+      handler: handleIssued
+    - event: Exited(indexed uint256,indexed address,uint256,uint256,uint256,uint256)
+      handler: handleExited
+    - event: Settled(indexed uint256,indexed address,uint256,uint256,uint256,uint256)
+      handler: handleSettled
+    - event: Finalized(indexed uint256,uint256,uint256,uint256,uint256,uint256)
+      handler: handleFinalized
+    - event: IssuanceStopped(indexed uint256,indexed address)
+      handler: handleIssuanceStopped
+    - event: WorthlessBurned(indexed uint256,indexed address,uint256)
+      handler: handleWorthlessBurned
+    - event: SeriesClosed(indexed uint256,uint256,uint256)
+      handler: handleSeriesClosed
+    file: ./src/controller.ts
+- kind: ethereum
+  name: Accumulator
+  network: base-sepolia
+  source:
+    abi: Accumulator
+    address: '0xcdd795440679d4F33bf410879e62B5A4015b4Dc9'
+    startBlock: 46685189
+  mapping:
+    kind: ethereum/events
+    apiVersion: 0.0.9
+    language: wasm/assemblyscript
+    entities:
+    - Series
+    - Checkpoint
+    abis:
+    - name: Accumulator
+      file: ./abis/Accumulator.json
+    eventHandlers:
+    - event: Checkpointed(indexed uint256,uint256,uint256,uint40,uint80,uint256)
+      handler: handleCheckpointed
+    file: ./src/accumulator.ts
+- kind: ethereum
+  name: Router
+  network: base-sepolia
+  source:
+    abi: Router
+    address: '0xb8dcED3Cf6266Dd8fEc05849fce3734B79A7e722'
+    startBlock: 46685189
+  mapping:
+    kind: ethereum/events
+    apiVersion: 0.0.9
+    language: wasm/assemblyscript
+    entities:
+    - Series
+    - Fill
+    - Order
+    abis:
+    - name: Router
+      file: ./abis/Router.json
+    eventHandlers:
+    - event: Swapped(bytes32,address,address,address,address,uint256,uint256)
+      handler: handleSwapped
+    file: ./src/router.ts
+- kind: ethereum
+  name: PortfolioMarket
+  network: base-sepolia
+  source:
+    abi: PortfolioMarket
+    address: '0x72798A6697Cb648847ec0E5ba0bc6491B2901ddb'
+    startBlock: 46685189
+  mapping:
+    kind: ethereum/events
+    apiVersion: 0.0.9
+    language: wasm/assemblyscript
+    entities:
+    - PortfolioGroup
+    - PortfolioEvent
+    abis:
+    - name: PortfolioMarket
+      file: ./abis/PortfolioMarket.json
+    eventHandlers:
+    - event: GroupCreated(indexed uint256,indexed address,indexed address,address,address,(address,address,uint40,uint40,uint40,uint32,uint64,uint128,uint128,uint128,uint128,uint128,uint128))
+      handler: handleGroupCreated
+    - event: PortfolioIssued(indexed uint256,indexed address,bool,uint256,uint256,uint256,uint256,uint256)
+      handler: handlePortfolioIssued
+    - event: PortfolioExited(indexed uint256,indexed address,bool,uint256,uint256,uint256,uint256,uint256)
+      handler: handlePortfolioExited
+    - event: PortfolioSettled(indexed uint256,indexed address,bool,uint256,uint256,uint256)
+      handler: handlePortfolioSettled
+    - event: GroupFinalized(indexed uint256,uint256,uint256,uint256,uint256,uint256)
+      handler: handleGroupFinalized
+    - event: ExitBufferFunded(indexed uint256,indexed address,uint256,uint256)
+      handler: handleExitBufferFunded
+    - event: ExitBufferWithdrawn(indexed uint256,uint256,uint256)
+      handler: handleExitBufferWithdrawn
+    - event: WorthlessBurned(indexed uint256,indexed address,bool,uint256)
+      handler: handleWorthlessBurned
+    file: ./src/portfolio.ts
 templates:
-  - kind: ethereum/contract
-    name: Receipt
-    network: base-sepolia
-    source:
-      abi: Receipt
-    mapping:
-      kind: ethereum/events
-      apiVersion: 0.0.9
-      language: wasm/assemblyscript
-      entities:
-        - Series
-        - ReceiptBalance
-        - ReceiptIndex
-      abis:
-        - name: Receipt
-          file: ./abis/Receipt.json
-      eventHandlers:
-        - event: Transfer(indexed address,indexed address,uint256)
-          handler: handleReceiptTransfer
-      file: ./src/receipt.ts
-  - kind: ethereum/contract
-    name: Vault
-    network: base-sepolia
-    source:
-      abi: Vault
-    mapping:
-      kind: ethereum/events
-      apiVersion: 0.0.9
-      language: wasm/assemblyscript
-      entities:
-        - Vault
-        - VaultAction
-      abis:
-        - name: Vault
-          file: ./abis/Vault.json
-      eventHandlers:
-        - event: Deposited(indexed address,uint256,uint256,uint256)
-          handler: handleDeposited
-        - event: FreeWithdrawn(indexed address,uint256,uint256,uint256)
-          handler: handleFreeWithdrawn
-        - event: LockedIncreased(uint256,uint256)
-          handler: handleLockedIncreased
-        - event: LockedDecreased(uint256,uint256)
-          handler: handleLockedDecreased
-        - event: ReceiptRegistered(indexed address)
-          handler: handleReceiptRegistered
-        - event: StrategyShipped(indexed bytes32)
-          handler: handleStrategyShipped
-        - event: StrategyDocked(indexed bytes32)
-          handler: handleStrategyDocked
-      file: ./src/vault.ts
+- kind: ethereum/contract
+  name: Receipt
+  network: base-sepolia
+  source:
+    abi: Receipt
+  mapping:
+    kind: ethereum/events
+    apiVersion: 0.0.9
+    language: wasm/assemblyscript
+    entities:
+    - Series
+    - ReceiptBalance
+    - ReceiptIndex
+    abis:
+    - name: Receipt
+      file: ./abis/Receipt.json
+    eventHandlers:
+    - event: Transfer(indexed address,indexed address,uint256)
+      handler: handleReceiptTransfer
+    file: ./src/receipt.ts
+- kind: ethereum/contract
+  name: Vault
+  network: base-sepolia
+  source:
+    abi: Vault
+  mapping:
+    kind: ethereum/events
+    apiVersion: 0.0.9
+    language: wasm/assemblyscript
+    entities:
+    - Vault
+    - VaultAction
+    abis:
+    - name: Vault
+      file: ./abis/Vault.json
+    eventHandlers:
+    - event: Deposited(indexed address,uint256,uint256,uint256)
+      handler: handleDeposited
+    - event: FreeWithdrawn(indexed address,uint256,uint256,uint256)
+      handler: handleFreeWithdrawn
+    - event: LockedIncreased(uint256,uint256)
+      handler: handleLockedIncreased
+    - event: LockedDecreased(uint256,uint256)
+      handler: handleLockedDecreased
+    - event: ReceiptRegistered(indexed address)
+      handler: handleReceiptRegistered
+    - event: StrategyShipped(indexed bytes32)
+      handler: handleStrategyShipped
+    - event: StrategyDocked(indexed bytes32)
+      handler: handleStrategyDocked
+    file: ./src/vault.ts
