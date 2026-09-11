@@ -1,7 +1,10 @@
 # secrets
 .env
 .env.*
+# example envs carry placeholders only — never real values
 !.env.example
+!.env.production.example
+!.env.sepolia.example
 # contracts
 contracts/out/
 contracts/cache/

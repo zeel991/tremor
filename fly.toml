@@ -1,0 +1,62 @@
+# Tremor read-only API on Fly.io.
+#
+# NOT DEPLOYED. `app` below is a placeholder — `fly launch --no-deploy` will set the real name, or edit it
+# before `fly deploy`. Nothing here is secret: the API holds no keys and refuses to start if given one.
+#
+# First-time sequence (run from the repository root, authenticated interactively with `fly auth login`):
+#
+#     fly launch --no-deploy --name <your-app-name>
+#     fly volumes create tremor_data --size 1 --region <region>
+#     fly secrets set CORS_ORIGIN=https://<your-frontend-origin>
+#     fly deploy
+#
+# CORS_ORIGIN is set as a secret rather than here only so it can be changed without editing this file;
+# it is not sensitive. It MUST be the frontend's exact production origin — no trailing slash, no "*".
+
+app = "tremor-api"
+primary_region = "iad"
+
+[build]
+  dockerfile = "backend/Dockerfile"
+
+[env]
+  RPC_URL = "https://sepolia.base.org"
+  DEPLOYMENT_JSON = "/app/deployments/84532.json"
+  # Must stay inside the /data mount below, or the index is lost on every restart.
+  DATABASE_URL = "sqlite:///data/tremor_84532.db"
+  PORT = "8080"
+  # The code default is 127.0.0.1, which is unreachable inside a container.
+  BIND_ADDRESS = "0.0.0.0"
+  POLL_MS = "3000"
+
+[[mounts]]
+  source = "tremor_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # This is a continuously running indexer, not a request-driven service. Stopping it on idle would
+  # leave the database behind head and serve stale data on the next request.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+  # Liveness. Readiness is richer than a status code: /health also reports ok, chain_id, schema_version,
+  # indexer_error and lag_blocks. Treat non-null indexer_error or a large lag_blocks as not-ready even
+  # while this check passes.
+  [[http_service.checks]]
+    grace_period = "20s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
