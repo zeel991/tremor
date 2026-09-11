@@ -25,7 +25,9 @@ use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::chainlink::{FeedError, Sample};
-use crate::db::{FillRow, FillStats, SeriesRow};
+use crate::db::{
+    FillRow, FillStats, PortfolioCheckpointRow, PortfolioEventRow, PortfolioGroupRow, SeriesRow,
+};
 use crate::error::{ApiError, ApiResult};
 use crate::market::{self, Checkpoint, Flow, Params};
 use crate::rpc::{retry, transport_retryable};
@@ -60,6 +62,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/variance/trailing", get(variance_trailing))
         .route("/feed/history", get(feed_history))
         .route("/lvr", get(lvr))
+        .route("/pairs", get(pairs_list))
+        .route("/pairs/:id", get(pairs_detail))
+        .route("/pairs/:id/events", get(pairs_events))
+        .route("/pairs/:id/checkpoints", get(pairs_checkpoints))
         .fallback(not_found)
         .layer(ConcurrencyLimitLayer::new(32))
         .layer(TimeoutLayer::with_status_code(
@@ -1041,4 +1047,78 @@ async fn lvr(State(s): S, Query(q): Q) -> ApiResult<Json<Value>> {
         "caveat": "gross sizing estimate; realized variance of a Chainlink sample path is not the \
                    quadratic variation an AMM pays, and the residual basis is not bounded here",
     })))
+}
+
+async fn pairs_list(State(s): S) -> ApiResult<Json<Vec<PortfolioGroupRow>>> {
+    Ok(Json(s.db.portfolio_groups_all().await?))
+}
+
+async fn pairs_detail(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    let group_id = parse_id(&id)?;
+    let row =
+        s.db.portfolio_group_by_id(group_id)
+            .await?
+            .ok_or_else(|| ApiError::NotFound(format!("portfolio group {group_id} not found")))?;
+    let events = s.db.portfolio_events_for_group(group_id, 200).await?;
+    let checkpoints = s.db.portfolio_checkpoints_for_group(group_id).await?;
+
+    let onchain_view = if s.manifest.portfolio_market != Address::ZERO {
+        let market =
+            crate::abi::TremorPortfolioMarket::new(s.manifest.portfolio_market, s.provider.clone());
+        match market
+            .groupView(alloy::primitives::U256::from(group_id))
+            .call()
+            .await
+        {
+            Ok(v) => Some(json!({
+                "writer": format!("{:#x}", v.writer),
+                "vault": format!("{:#x}", v.vault),
+                "high_receipt": format!("{:#x}", v.highReceipt),
+                "calm_receipt": format!("{:#x}", v.calmReceipt),
+                "high_outstanding": v.highOutstanding.to_string(),
+                "calm_outstanding": v.calmOutstanding.to_string(),
+                "reserve_locked": v.reserveLocked.to_string(),
+                "exit_buffer": v.exitBuffer.to_string(),
+                "standalone_caps": v.standaloneCaps.to_string(),
+                "finalized": v.finalized,
+                "final_variance": v.finalVariance.to_string(),
+                "x_wad": v.xWad.to_string(),
+                "high_ppu": v.highPpu.to_string(),
+                "calm_ppu": v.calmPpu.to_string(),
+            })),
+            Err(e) => {
+                tracing::debug!(group_id, error = %e, "could not read groupView from chain");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    Ok(Json(json!({
+        "group": row,
+        "onchain": onchain_view,
+        "events": events,
+        "checkpoints": checkpoints,
+    })))
+}
+
+async fn pairs_events(
+    State(s): S,
+    Path(id): Path<String>,
+    Query(q): Q,
+) -> ApiResult<Json<Vec<PortfolioEventRow>>> {
+    let group_id = parse_id(&id)?;
+    let limit = qp_u64(&q, "limit")?.unwrap_or(200).clamp(1, 1000);
+    Ok(Json(
+        s.db.portfolio_events_for_group(group_id, limit).await?,
+    ))
+}
+
+async fn pairs_checkpoints(
+    State(s): S,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<PortfolioCheckpointRow>>> {
+    let group_id = parse_id(&id)?;
+    Ok(Json(s.db.portfolio_checkpoints_for_group(group_id).await?))
 }

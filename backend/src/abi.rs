@@ -156,6 +156,105 @@ sol! {
         function SERIES_ID() external view returns (uint256);
         function VAULT() external view returns (address);
     }
+
+    /// `TremorPortfolioMarket`, the portfolio risk group controller and settlement engine.
+    #[sol(rpc)]
+    #[derive(Debug)]
+    interface TremorPortfolioMarket {
+        struct GroupParams {
+            address feed;
+            address quoteToken;
+            uint40  start;
+            uint40  expiry;
+            uint40  saleEnd;
+            uint32  sampleInterval;
+            uint64  capVariance;
+            uint128 capPayoutPerUnit;
+            uint128 maxUnitsPerSide;
+            uint128 askHigh;
+            uint128 bidHigh;
+            uint128 askCalm;
+            uint128 bidCalm;
+        }
+
+        struct GroupView {
+            address writer;
+            address vault;
+            address highReceipt;
+            address calmReceipt;
+            uint256 highOutstanding;
+            uint256 calmOutstanding;
+            uint256 reserveLocked;
+            uint256 exitBuffer;
+            uint256 standaloneCaps;
+            bool    finalized;
+            uint256 finalVariance;
+            uint256 xWad;
+            uint256 highPpu;
+            uint256 calmPpu;
+        }
+
+        event VaultCreated(address indexed writer, address vault);
+        event GroupCreated(
+            uint256 indexed groupId,
+            address indexed writer,
+            address indexed vault,
+            address highReceipt,
+            address calmReceipt,
+            GroupParams params
+        );
+        event PortfolioIssued(
+            uint256 indexed groupId,
+            address indexed buyer,
+            bool high,
+            uint256 units,
+            uint256 premium,
+            uint256 highOutstanding,
+            uint256 calmOutstanding,
+            uint256 reserveLocked
+        );
+        event PortfolioExited(
+            uint256 indexed groupId,
+            address indexed holder,
+            bool high,
+            uint256 units,
+            uint256 amountOut,
+            uint256 reserveReleased,
+            uint256 bufferDrawn,
+            uint256 reserveLocked
+        );
+        event PortfolioSettled(
+            uint256 indexed groupId,
+            address indexed holder,
+            bool high,
+            uint256 units,
+            uint256 amountOut,
+            uint256 reserveLocked
+        );
+        event GroupFinalized(
+            uint256 indexed groupId,
+            uint256 finalVariance,
+            uint256 xWad,
+            uint256 highPayoutPerUnit,
+            uint256 calmPayoutPerUnit,
+            uint256 releasedCollateral
+        );
+        event ExitBufferFunded(uint256 indexed groupId, address indexed payer, uint256 amount, uint256 newBuffer);
+        event ExitBufferWithdrawn(uint256 indexed groupId, uint256 amount, uint256 newBuffer);
+        event WorthlessBurned(uint256 indexed groupId, address indexed holder, bool high, uint256 units);
+
+        function groupCount() external view returns (uint256);
+        function groupParams(uint256 groupId) external view returns (GroupParams);
+        function groupView(uint256 groupId) external view returns (GroupView);
+        function vaultOf(address writer) external view returns (address);
+        function isVault(address vault) external view returns (bool);
+        function predictVault(address writer) external view returns (address);
+        function ROUTER() external view returns (address);
+        function AQUA() external view returns (address);
+        function FEED() external view returns (address);
+        function QUOTE_TOKEN() external view returns (address);
+        function ACCUMULATOR() external view returns (address);
+    }
 }
 
 #[cfg(not(lens_abi_json))]
@@ -347,5 +446,102 @@ mod tests {
             Aqua::Pushed::SIGNATURE,
             "Pushed(address,address,bytes32,address,uint256)"
         );
+        let group_created = "GroupCreated(uint256,address,address,address,address,(address,address,uint40,uint40,uint40,uint32,uint64,uint128,uint128,uint128,uint128,uint128,uint128))";
+        assert_eq!(
+            TremorPortfolioMarket::GroupCreated::SIGNATURE,
+            group_created
+        );
+        assert_eq!(
+            TremorPortfolioMarket::PortfolioIssued::SIGNATURE,
+            "PortfolioIssued(uint256,address,bool,uint256,uint256,uint256,uint256,uint256)"
+        );
+        assert_eq!(
+            TremorPortfolioMarket::PortfolioExited::SIGNATURE,
+            "PortfolioExited(uint256,address,bool,uint256,uint256,uint256,uint256,uint256)"
+        );
+        assert_eq!(
+            TremorPortfolioMarket::PortfolioSettled::SIGNATURE,
+            "PortfolioSettled(uint256,address,bool,uint256,uint256,uint256)"
+        );
+        assert_eq!(
+            TremorPortfolioMarket::GroupFinalized::SIGNATURE,
+            "GroupFinalized(uint256,uint256,uint256,uint256,uint256,uint256)"
+        );
+        assert_eq!(
+            TremorPortfolioMarket::ExitBufferFunded::SIGNATURE,
+            "ExitBufferFunded(uint256,address,uint256,uint256)"
+        );
+        assert_eq!(
+            TremorPortfolioMarket::ExitBufferWithdrawn::SIGNATURE,
+            "ExitBufferWithdrawn(uint256,uint256,uint256)"
+        );
+        assert_eq!(
+            TremorPortfolioMarket::WorthlessBurned::SIGNATURE,
+            "WorthlessBurned(uint256,address,bool,uint256)"
+        );
+    }
+
+    #[test]
+    fn portfolio_abi_log_decoding_round_trip() {
+        use alloy::primitives::Address;
+        // Test GroupFinalized decode
+        let gf = TremorPortfolioMarket::GroupFinalized {
+            groupId: alloy::primitives::U256::from(1),
+            finalVariance: alloy::primitives::U256::from(105488314168210179u128),
+            xWad: alloy::primitives::U256::from(105488314168210179u128),
+            highPayoutPerUnit: alloy::primitives::U256::from(105488),
+            calmPayoutPerUnit: alloy::primitives::U256::from(894512),
+            releasedCollateral: alloy::primitives::U256::ZERO,
+        };
+        let log = gf.encode_log_data();
+        let decoded =
+            TremorPortfolioMarket::GroupFinalized::decode_raw_log(log.topics(), &log.data).unwrap();
+        assert_eq!(decoded.groupId, alloy::primitives::U256::from(1));
+        assert_eq!(
+            decoded.finalVariance,
+            alloy::primitives::U256::from(105488314168210179u128)
+        );
+        assert_eq!(
+            decoded.highPayoutPerUnit,
+            alloy::primitives::U256::from(105488)
+        );
+        assert_eq!(
+            decoded.calmPayoutPerUnit,
+            alloy::primitives::U256::from(894512)
+        );
+
+        // Test PortfolioIssued decode
+        let pi = TremorPortfolioMarket::PortfolioIssued {
+            groupId: alloy::primitives::U256::from(1),
+            buyer: Address::repeat_byte(0x01),
+            high: true,
+            units: alloy::primitives::U256::from(100),
+            premium: alloy::primitives::U256::from(30),
+            highOutstanding: alloy::primitives::U256::from(100),
+            calmOutstanding: alloy::primitives::U256::ZERO,
+            reserveLocked: alloy::primitives::U256::from(100),
+        };
+        let log_pi = pi.encode_log_data();
+        let decoded_pi =
+            TremorPortfolioMarket::PortfolioIssued::decode_raw_log(log_pi.topics(), &log_pi.data)
+                .unwrap();
+        assert_eq!(decoded_pi.groupId, alloy::primitives::U256::from(1));
+        assert!(decoded_pi.high);
+        assert_eq!(decoded_pi.units, alloy::primitives::U256::from(100));
+        assert_eq!(decoded_pi.premium, alloy::primitives::U256::from(30));
+
+        // Test ExitBufferFunded decode
+        let bf = TremorPortfolioMarket::ExitBufferFunded {
+            groupId: alloy::primitives::U256::from(1),
+            payer: Address::repeat_byte(0x02),
+            amount: alloy::primitives::U256::from(5000000),
+            newBuffer: alloy::primitives::U256::from(5000000),
+        };
+        let log_bf = bf.encode_log_data();
+        let decoded_bf =
+            TremorPortfolioMarket::ExitBufferFunded::decode_raw_log(log_bf.topics(), &log_bf.data)
+                .unwrap();
+        assert_eq!(decoded_bf.amount, alloy::primitives::U256::from(5000000));
+        assert_eq!(decoded_bf.newBuffer, alloy::primitives::U256::from(5000000));
     }
 }

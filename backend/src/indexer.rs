@@ -33,10 +33,12 @@ use serde::Serialize;
 use tokio::sync::RwLock;
 
 use crate::abi::{
-    Aqua, AquaSwapVMRouter, TremorMakerVault, VarianceAccumulator, VarianceSeriesFactory,
+    Aqua, AquaSwapVMRouter, TremorMakerVault, TremorPortfolioMarket, VarianceAccumulator,
+    VarianceSeriesFactory,
 };
 use crate::db::{
-    AquaEventRow, CheckpointRow, FillRow, FinalizationRow, SeriesRow, VaultEventRow, VaultRow,
+    AquaEventRow, CheckpointRow, FillRow, FinalizationRow, PortfolioCheckpointRow,
+    PortfolioEventRow, PortfolioGroupRow, SeriesRow, VaultEventRow, VaultRow,
 };
 use crate::rpc::{retry, transport_retryable};
 use crate::util::{nonnegative_u64, now_unix, sqlite_i64};
@@ -240,6 +242,14 @@ fn controller_topics() -> Vec<B256> {
         Aqua::Docked::SIGNATURE_HASH,
         Aqua::Pulled::SIGNATURE_HASH,
         Aqua::Pushed::SIGNATURE_HASH,
+        TremorPortfolioMarket::GroupCreated::SIGNATURE_HASH,
+        TremorPortfolioMarket::PortfolioIssued::SIGNATURE_HASH,
+        TremorPortfolioMarket::PortfolioExited::SIGNATURE_HASH,
+        TremorPortfolioMarket::PortfolioSettled::SIGNATURE_HASH,
+        TremorPortfolioMarket::GroupFinalized::SIGNATURE_HASH,
+        TremorPortfolioMarket::ExitBufferFunded::SIGNATURE_HASH,
+        TremorPortfolioMarket::ExitBufferWithdrawn::SIGNATURE_HASH,
+        TremorPortfolioMarket::WorthlessBurned::SIGNATURE_HASH,
     ]
 }
 
@@ -335,7 +345,13 @@ async fn tick(
         return Ok(());
     }
 
-    let fixed = vec![m.series_factory, m.accumulator, m.router, m.aqua];
+    let mut fixed = vec![m.series_factory, m.accumulator, m.router, m.aqua];
+    if m.portfolio_market != Address::ZERO {
+        fixed.push(m.portfolio_market);
+    }
+    if m.portfolio_accumulator != Address::ZERO {
+        fixed.push(m.portfolio_accumulator);
+    }
     let fixed_topics = controller_topics();
     let vault_event_topics = vault_topics();
 
@@ -516,6 +532,44 @@ async fn process_log(
         );
         state.db.insert_checkpoint(&row).await?;
         return Ok(());
+    }
+    if addr == m.portfolio_accumulator
+        && topic0 == VarianceAccumulator::Checkpointed::SIGNATURE_HASH
+    {
+        let ev = log
+            .log_decode::<VarianceAccumulator::Checkpointed>()
+            .context("decode portfolio Checkpointed")?
+            .inner
+            .data;
+        let row = PortfolioCheckpointRow {
+            tx_hash: meta.tx_hash.clone(),
+            log_index: meta.log_index,
+            block: meta.block,
+            timestamp: meta.timestamp,
+            group_id: sqlite_i64(u64::try_from(ev.seriesId).context("group id")?, "group id")?,
+            from_sample: sqlite_i64(
+                u64::try_from(ev.fromSample).context("from sample")?,
+                "from sample",
+            )?,
+            to_sample: sqlite_i64(
+                u64::try_from(ev.toSample).context("to sample")?,
+                "to sample",
+            )?,
+            processed_through: sqlite_i64(ev.processedThrough.to::<u64>(), "processed through")?,
+            last_round_id: ev.lastRoundId.to_string(),
+            sum_squared_returns: ev.sumSquaredReturnsWad.to_string(),
+        };
+        tracing::info!(
+            group_id = row.group_id,
+            from = row.from_sample,
+            to = row.to_sample,
+            "Portfolio Checkpointed"
+        );
+        state.db.insert_portfolio_checkpoint(&row).await?;
+        return Ok(());
+    }
+    if addr == m.portfolio_market {
+        return process_portfolio_market_log(state, vaults, log, topic0, &meta).await;
     }
     if addr == m.router && topic0 == AquaSwapVMRouter::Swapped::SIGNATURE_HASH {
         return process_swap(state, order_map, log, &meta).await;
@@ -705,6 +759,376 @@ async fn process_controller_log(
             "WorthlessBurned"
         );
     }
+    Ok(())
+}
+
+async fn process_portfolio_market_log(
+    state: &AppState,
+    vaults: &mut HashSet<Address>,
+    log: &Log,
+    topic0: B256,
+    meta: &LogMeta,
+) -> Result<()> {
+    if topic0 == TremorPortfolioMarket::VaultCreated::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<TremorPortfolioMarket::VaultCreated>()
+            .context("decode portfolio VaultCreated")?
+            .inner
+            .data;
+        let row = VaultRow {
+            address: hex_addr(ev.vault),
+            writer: hex_addr(ev.writer),
+            quote_token: hex_addr(state.manifest.usdc),
+            created_block: meta.block,
+            created_tx: meta.tx_hash.clone(),
+            created_at: meta.timestamp,
+            deposited: "0".into(),
+            withdrawn: "0".into(),
+            last_balance: None,
+            last_locked: None,
+            last_event_at: None,
+        };
+        state.db.insert_vault(&row).await?;
+        vaults.insert(ev.vault);
+        tracing::info!(vault = %row.address, writer = %row.writer, "Portfolio VaultCreated");
+        return Ok(());
+    }
+
+    if topic0 == TremorPortfolioMarket::GroupCreated::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<TremorPortfolioMarket::GroupCreated>()
+            .context("decode GroupCreated")?
+            .inner
+            .data;
+        let id = u64::try_from(ev.groupId).context("group id exceeds u64")?;
+        let p = &ev.params;
+        let row = PortfolioGroupRow {
+            id: sqlite_i64(id, "group id")?,
+            writer: hex_addr(ev.writer),
+            vault: hex_addr(ev.vault),
+            high_receipt: hex_addr(ev.highReceipt),
+            calm_receipt: hex_addr(ev.calmReceipt),
+            feed: hex_addr(p.feed),
+            quote_token: hex_addr(p.quoteToken),
+            start: sqlite_i64(p.start.to::<u64>(), "group start")?,
+            expiry: sqlite_i64(p.expiry.to::<u64>(), "group expiry")?,
+            sale_end: sqlite_i64(p.saleEnd.to::<u64>(), "group sale end")?,
+            sample_interval: p.sampleInterval as i64,
+            cap_variance: p.capVariance.to_string(),
+            cap_payout_per_unit: p.capPayoutPerUnit.to_string(),
+            max_units_per_side: p.maxUnitsPerSide.to_string(),
+            ask_high: p.askHigh.to_string(),
+            bid_high: p.bidHigh.to_string(),
+            ask_calm: p.askCalm.to_string(),
+            bid_calm: p.bidCalm.to_string(),
+            high_outstanding: "0".into(),
+            calm_outstanding: "0".into(),
+            reserve_locked: "0".into(),
+            exit_buffer: "0".into(),
+            finalized: 0,
+            final_variance: None,
+            high_ppu: None,
+            calm_ppu: None,
+            created_block: meta.block,
+            created_tx: meta.tx_hash.clone(),
+            created_at: meta.timestamp,
+        };
+        state.db.insert_portfolio_group(&row).await?;
+        vaults.insert(ev.vault);
+        tracing::info!(id, writer = %row.writer, vault = %row.vault, "GroupCreated");
+        return Ok(());
+    }
+
+    if topic0 == TremorPortfolioMarket::PortfolioIssued::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<TremorPortfolioMarket::PortfolioIssued>()
+            .context("decode PortfolioIssued")?
+            .inner
+            .data;
+        let group_id = sqlite_i64(u64::try_from(ev.groupId).context("group id")?, "group id")?;
+        let side = if ev.high { "high" } else { "calm" };
+        let event_row = PortfolioEventRow {
+            id: 0,
+            group_id,
+            event_type: "issued".into(),
+            actor: Some(hex_addr(ev.buyer)),
+            side: Some(side.into()),
+            units: ev.units.to_string(),
+            amount: ev.premium.to_string(),
+            new_outstanding: Some(if ev.high {
+                ev.highOutstanding.to_string()
+            } else {
+                ev.calmOutstanding.to_string()
+            }),
+            new_reserve: Some(ev.reserveLocked.to_string()),
+            new_buffer: None,
+            block_number: meta.block,
+            tx_hash: meta.tx_hash.clone(),
+            log_index: meta.log_index,
+            timestamp: meta.timestamp,
+        };
+        let inserted = state.db.insert_portfolio_event(&event_row).await?;
+        if inserted {
+            state
+                .db
+                .update_portfolio_group_balances(
+                    group_id,
+                    Some(&ev.highOutstanding.to_string()),
+                    Some(&ev.calmOutstanding.to_string()),
+                    Some(&ev.reserveLocked.to_string()),
+                    None,
+                )
+                .await?;
+        }
+        tracing::info!(group_id, side, units = %ev.units, premium = %ev.premium, "PortfolioIssued");
+        return Ok(());
+    }
+
+    if topic0 == TremorPortfolioMarket::PortfolioExited::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<TremorPortfolioMarket::PortfolioExited>()
+            .context("decode PortfolioExited")?
+            .inner
+            .data;
+        let group_id = sqlite_i64(u64::try_from(ev.groupId).context("group id")?, "group id")?;
+        let side = if ev.high { "high" } else { "calm" };
+        let event_row = PortfolioEventRow {
+            id: 0,
+            group_id,
+            event_type: "exited".into(),
+            actor: Some(hex_addr(ev.holder)),
+            side: Some(side.into()),
+            units: ev.units.to_string(),
+            amount: ev.amountOut.to_string(),
+            new_outstanding: None,
+            new_reserve: Some(ev.reserveLocked.to_string()),
+            new_buffer: None,
+            block_number: meta.block,
+            tx_hash: meta.tx_hash.clone(),
+            log_index: meta.log_index,
+            timestamp: meta.timestamp,
+        };
+        let inserted = state.db.insert_portfolio_event(&event_row).await?;
+        if inserted {
+            state
+                .db
+                .deduct_portfolio_units(
+                    group_id,
+                    ev.high,
+                    &ev.units.to_string(),
+                    &ev.reserveLocked.to_string(),
+                    Some(&ev.bufferDrawn.to_string()),
+                )
+                .await?;
+        }
+        tracing::info!(group_id, side, units = %ev.units, amount_out = %ev.amountOut, "PortfolioExited");
+        return Ok(());
+    }
+
+    if topic0 == TremorPortfolioMarket::PortfolioSettled::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<TremorPortfolioMarket::PortfolioSettled>()
+            .context("decode PortfolioSettled")?
+            .inner
+            .data;
+        let group_id = sqlite_i64(u64::try_from(ev.groupId).context("group id")?, "group id")?;
+        let side = if ev.high { "high" } else { "calm" };
+        let event_row = PortfolioEventRow {
+            id: 0,
+            group_id,
+            event_type: "settled".into(),
+            actor: Some(hex_addr(ev.holder)),
+            side: Some(side.into()),
+            units: ev.units.to_string(),
+            amount: ev.amountOut.to_string(),
+            new_outstanding: None,
+            new_reserve: Some(ev.reserveLocked.to_string()),
+            new_buffer: None,
+            block_number: meta.block,
+            tx_hash: meta.tx_hash.clone(),
+            log_index: meta.log_index,
+            timestamp: meta.timestamp,
+        };
+        let inserted = state.db.insert_portfolio_event(&event_row).await?;
+        if inserted {
+            state
+                .db
+                .deduct_portfolio_units(
+                    group_id,
+                    ev.high,
+                    &ev.units.to_string(),
+                    &ev.reserveLocked.to_string(),
+                    None,
+                )
+                .await?;
+        }
+        tracing::info!(group_id, side, units = %ev.units, amount_out = %ev.amountOut, "PortfolioSettled");
+        return Ok(());
+    }
+
+    if topic0 == TremorPortfolioMarket::GroupFinalized::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<TremorPortfolioMarket::GroupFinalized>()
+            .context("decode GroupFinalized")?
+            .inner
+            .data;
+        let group_id = sqlite_i64(u64::try_from(ev.groupId).context("group id")?, "group id")?;
+        let final_var = ev.finalVariance.to_string();
+        let high_ppu = ev.highPayoutPerUnit.to_string();
+        let calm_ppu = ev.calmPayoutPerUnit.to_string();
+        let rel_collateral = ev.releasedCollateral.to_string();
+
+        let group_opt = state.db.portfolio_group_by_id(group_id).await?;
+        let final_reserve = if let Some(g) = &group_opt {
+            let h_units: U256 = g.high_outstanding.parse().unwrap_or_default();
+            let c_units: U256 = g.calm_outstanding.parse().unwrap_or_default();
+            let wad = U256::from(1_000_000_000_000_000_000u128);
+            let h_liab = h_units * ev.highPayoutPerUnit / wad;
+            let c_liab = c_units * ev.calmPayoutPerUnit / wad;
+            (h_liab + c_liab).to_string()
+        } else {
+            "0".to_string()
+        };
+
+        state
+            .db
+            .finalize_portfolio_group(group_id, &final_var, &high_ppu, &calm_ppu, &final_reserve)
+            .await?;
+
+        let event_row = PortfolioEventRow {
+            id: 0,
+            group_id,
+            event_type: "finalized".into(),
+            actor: None,
+            side: None,
+            units: "0".into(),
+            amount: rel_collateral,
+            new_outstanding: None,
+            new_reserve: None,
+            new_buffer: None,
+            block_number: meta.block,
+            tx_hash: meta.tx_hash.clone(),
+            log_index: meta.log_index,
+            timestamp: meta.timestamp,
+        };
+        state.db.insert_portfolio_event(&event_row).await?;
+        tracing::info!(group_id, final_var = %final_var, high_ppu = %high_ppu, calm_ppu = %calm_ppu, "GroupFinalized");
+        return Ok(());
+    }
+
+    if topic0 == TremorPortfolioMarket::ExitBufferFunded::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<TremorPortfolioMarket::ExitBufferFunded>()
+            .context("decode ExitBufferFunded")?
+            .inner
+            .data;
+        let group_id = sqlite_i64(u64::try_from(ev.groupId).context("group id")?, "group id")?;
+        let new_buf = ev.newBuffer.to_string();
+        let event_row = PortfolioEventRow {
+            id: 0,
+            group_id,
+            event_type: "buffer_funded".into(),
+            actor: Some(hex_addr(ev.payer)),
+            side: None,
+            units: "0".into(),
+            amount: ev.amount.to_string(),
+            new_outstanding: None,
+            new_reserve: None,
+            new_buffer: Some(new_buf.clone()),
+            block_number: meta.block,
+            tx_hash: meta.tx_hash.clone(),
+            log_index: meta.log_index,
+            timestamp: meta.timestamp,
+        };
+        let inserted = state.db.insert_portfolio_event(&event_row).await?;
+        if inserted {
+            state
+                .db
+                .update_portfolio_group_balances(group_id, None, None, None, Some(&new_buf))
+                .await?;
+        }
+        tracing::info!(group_id, amount = %ev.amount, new_buffer = %new_buf, "ExitBufferFunded");
+        return Ok(());
+    }
+
+    if topic0 == TremorPortfolioMarket::ExitBufferWithdrawn::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<TremorPortfolioMarket::ExitBufferWithdrawn>()
+            .context("decode ExitBufferWithdrawn")?
+            .inner
+            .data;
+        let group_id = sqlite_i64(u64::try_from(ev.groupId).context("group id")?, "group id")?;
+        let new_buf = ev.newBuffer.to_string();
+        let event_row = PortfolioEventRow {
+            id: 0,
+            group_id,
+            event_type: "buffer_withdrawn".into(),
+            actor: None,
+            side: None,
+            units: "0".into(),
+            amount: ev.amount.to_string(),
+            new_outstanding: None,
+            new_reserve: None,
+            new_buffer: Some(new_buf.clone()),
+            block_number: meta.block,
+            tx_hash: meta.tx_hash.clone(),
+            log_index: meta.log_index,
+            timestamp: meta.timestamp,
+        };
+        let inserted = state.db.insert_portfolio_event(&event_row).await?;
+        if inserted {
+            state
+                .db
+                .update_portfolio_group_balances(group_id, None, None, None, Some(&new_buf))
+                .await?;
+        }
+        tracing::info!(group_id, amount = %ev.amount, new_buffer = %new_buf, "ExitBufferWithdrawn");
+        return Ok(());
+    }
+
+    if topic0 == TremorPortfolioMarket::WorthlessBurned::SIGNATURE_HASH {
+        let ev = log
+            .log_decode::<TremorPortfolioMarket::WorthlessBurned>()
+            .context("decode WorthlessBurned")?
+            .inner
+            .data;
+        let group_id = sqlite_i64(u64::try_from(ev.groupId).context("group id")?, "group id")?;
+        let side = if ev.high { "high" } else { "calm" };
+        let event_row = PortfolioEventRow {
+            id: 0,
+            group_id,
+            event_type: "worthless_burned".into(),
+            actor: Some(hex_addr(ev.holder)),
+            side: Some(side.into()),
+            units: ev.units.to_string(),
+            amount: "0".into(),
+            new_outstanding: None,
+            new_reserve: None,
+            new_buffer: None,
+            block_number: meta.block,
+            tx_hash: meta.tx_hash.clone(),
+            log_index: meta.log_index,
+            timestamp: meta.timestamp,
+        };
+        let inserted = state.db.insert_portfolio_event(&event_row).await?;
+        if inserted {
+            if let Some(group) = state.db.portfolio_group_by_id(group_id).await? {
+                state
+                    .db
+                    .deduct_portfolio_units(
+                        group_id,
+                        ev.high,
+                        &ev.units.to_string(),
+                        &group.reserve_locked,
+                        None,
+                    )
+                    .await?;
+            }
+        }
+        tracing::info!(group_id, side, holder = %ev.holder, units = %ev.units, "WorthlessBurned");
+        return Ok(());
+    }
+
     Ok(())
 }
 
@@ -1066,5 +1490,441 @@ mod tests {
             U256::from(500_000_000u64)
         );
         assert_eq!(price_per_unit(U256::from(5), U256::ZERO), U256::ZERO);
+    }
+
+    #[tokio::test]
+    async fn real_chain_portfolio_indexer_integration() {
+        use alloy::primitives::U256;
+        use alloy::providers::{DynProvider, Provider, ProviderBuilder};
+        use alloy::rpc::types::Filter;
+
+        let rpc_url = match "http://127.0.0.1:8545".parse() {
+            Ok(u) => u,
+            Err(_) => return,
+        };
+        let provider: DynProvider = ProviderBuilder::new().connect_http(rpc_url).erased();
+
+        // Fail honestly if Anvil RPC is unreachable
+        provider
+            .get_block_number()
+            .await
+            .expect("Anvil RPC must be reachable at http://127.0.0.1:8545 for real-chain indexer integration test");
+
+        let manifest_path = "../contracts/deployments/31337.json";
+        let manifest_bytes = std::fs::read(manifest_path).expect(
+            "31337.json deployment manifest must exist for real-chain indexer integration test",
+        );
+        let manifest: crate::config::Manifest = serde_json::from_slice(&manifest_bytes)
+            .expect("31337.json manifest must be valid JSON");
+        assert_ne!(
+            manifest.portfolio_market,
+            Address::ZERO,
+            "manifest.portfolio_market must be configured (non-zero)"
+        );
+
+        // 1. Query actual mined logs for portfolioMarket from the chain
+        let filter = Filter::new()
+            .address(manifest.portfolio_market)
+            .from_block(manifest.deployment_block);
+        let logs = provider
+            .get_logs(&filter)
+            .await
+            .expect("get_logs for portfolio_market must succeed");
+        assert!(
+            logs.len() >= 8,
+            "Expected at least 8 portfolio demo logs on chain, but found {}",
+            logs.len()
+        );
+
+        // Fetch block timestamps dynamically from provider
+        let mut block_timestamps: HashMap<u64, i64> = HashMap::new();
+        for log in &logs {
+            let b = log.block_number.unwrap_or_default();
+            // `entry` rather than contains_key/insert: the fetch is awaited, so the closure-taking
+            // `or_insert_with` helpers do not apply and the Vacant arm is the clippy-clean equivalent.
+            if let std::collections::hash_map::Entry::Vacant(slot) = block_timestamps.entry(b) {
+                let blk = provider
+                    .get_block_by_number(b.into())
+                    .await
+                    .expect("get_block_by_number must succeed")
+                    .expect("block must exist");
+                slot.insert(blk.header.timestamp as i64);
+            }
+        }
+
+        // 2. Set up fresh in-memory database with schema v3
+        let db = crate::db::Db::connect_memory().await.unwrap();
+        db.migrate(false).await.unwrap();
+
+        // 3. Construct AppState with db and manifest
+        let cfg = crate::config::Config {
+            rpc_url: "http://127.0.0.1:8545".into(),
+            deployment_json: manifest_path.into(),
+            database_url: ":memory:".into(),
+            port: 8787,
+            bind_address: "127.0.0.1".parse().unwrap(),
+            poll_ms: 1000,
+            cors_origin: "*".into(),
+        };
+        let chainlink = crate::chainlink::Chainlink::new(
+            crate::chainlink::RpcRoundSource::new(provider.clone()),
+            db.clone(),
+        );
+        let lens = crate::lens::LensClient::new(manifest.lens, provider.clone());
+        let indexer_handle = IndexerHandle::new(Some(31337));
+
+        let app_state = AppState {
+            cfg,
+            manifest: manifest.clone(),
+            provider: provider.clone(),
+            db: db.clone(),
+            chainlink,
+            lens,
+            indexer: indexer_handle,
+            feed_decimals: 8,
+            max_samples_per_checkpoint: 8,
+        };
+
+        // 4. Pass actual on-chain logs through the production decoder/indexer path.
+        // Logs are processed in ascending block/transaction/log_index order (as returned by
+        // get_logs). For each WorthlessBurned log, the indexed outstanding supply is captured
+        // immediately before processing so the exact decrement can be verified without
+        // saturating subtraction.
+        let worthless_sig = crate::abi::TremorPortfolioMarket::WorthlessBurned::SIGNATURE_HASH;
+        let mut vaults = HashSet::new();
+        // get_logs returns logs in ascending (block, tx_index, log_index) order per the Ethereum
+        // JSON-RPC spec; sort explicitly as a safety net against RPC non-compliance.
+        let mut ordered_logs = logs.clone();
+        ordered_logs.sort_by_key(|l| {
+            (
+                l.block_number.unwrap_or_default(),
+                l.transaction_index.unwrap_or_default(),
+                l.log_index.unwrap_or_default(),
+            )
+        });
+
+        for log in &ordered_logs {
+            let topic0 = match log.topics().first().copied() {
+                Some(t) => t,
+                None => continue,
+            };
+            let block = log.block_number.unwrap_or_default();
+            let tx_hash = log
+                .transaction_hash
+                .map(|h| format!("{h:#x}"))
+                .unwrap_or_default();
+            let log_index = log.log_index.unwrap_or_default();
+            let timestamp = *block_timestamps.get(&block).unwrap_or(&1000);
+            let meta = LogMeta {
+                tx_hash,
+                log_index: log_index as i64,
+                block: block as i64,
+                timestamp,
+            };
+
+            if topic0 == worthless_sig {
+                // Decode the mined event to know which group/side and how many units.
+                let ev = log
+                    .log_decode::<crate::abi::TremorPortfolioMarket::WorthlessBurned>()
+                    .expect("decode WorthlessBurned during ordered ingestion")
+                    .inner
+                    .data;
+                let gid = i64::try_from(u64::try_from(ev.groupId).expect("groupId fits u64"))
+                    .expect("groupId fits i64");
+
+                // Capture the indexed outstanding supply immediately before processing this log.
+                let pre_burn_group = db
+                    .portfolio_group_by_id(gid)
+                    .await
+                    .unwrap()
+                    .unwrap_or_else(|| panic!("group {} must exist before WorthlessBurned", gid));
+                let pre_burn_outstanding: U256 = if ev.high {
+                    pre_burn_group
+                        .high_outstanding
+                        .parse()
+                        .expect("high_outstanding is valid U256")
+                } else {
+                    pre_burn_group
+                        .calm_outstanding
+                        .parse()
+                        .expect("calm_outstanding is valid U256")
+                };
+
+                assert!(
+                    pre_burn_outstanding >= ev.units,
+                    "pre-burn indexed supply ({}) must be >= burned units ({}) for group {} side {}",
+                    pre_burn_outstanding,
+                    ev.units,
+                    gid,
+                    if ev.high { "high" } else { "calm" }
+                );
+                let expected_post_burn = pre_burn_outstanding - ev.units; // exact subtraction, no saturating
+
+                // Process the mined log through the production decoder/indexer path.
+                process_portfolio_market_log(&app_state, &mut vaults, log, topic0, &meta)
+                    .await
+                    .unwrap();
+
+                // Assert post-burn supply equals pre-burn minus burned units exactly.
+                let post_burn_group = db
+                    .portfolio_group_by_id(gid)
+                    .await
+                    .unwrap()
+                    .unwrap_or_else(|| panic!("group {} must exist after WorthlessBurned", gid));
+                let post_burn_outstanding: U256 = if ev.high {
+                    post_burn_group
+                        .high_outstanding
+                        .parse()
+                        .expect("high_outstanding is valid U256")
+                } else {
+                    post_burn_group
+                        .calm_outstanding
+                        .parse()
+                        .expect("calm_outstanding is valid U256")
+                };
+                assert_eq!(
+                    post_burn_outstanding, expected_post_burn,
+                    "post-burn indexed supply must equal pre_burn - units exactly \
+                     (pre={}, units={}, expected={}, got={}) — \
+                     saturating subtraction would mask an underflow",
+                    pre_burn_outstanding, ev.units, expected_post_burn, post_burn_outstanding
+                );
+            } else {
+                process_portfolio_market_log(&app_state, &mut vaults, log, topic0, &meta)
+                    .await
+                    .unwrap();
+            }
+        }
+
+        // 5. Verify persisted state and event coverage across lifecycle
+        let group1 = db
+            .portfolio_group_by_id(1)
+            .await
+            .unwrap()
+            .expect("group 1 must exist");
+        assert_eq!(group1.id, 1);
+        let events1 = db.portfolio_events_for_group(1, 200).await.unwrap();
+        assert!(!events1.is_empty(), "expected events for group 1");
+
+        let event_types1: HashSet<&str> = events1.iter().map(|e| e.event_type.as_str()).collect();
+        assert!(
+            event_types1.contains("issued"),
+            "expected issued event for group 1"
+        );
+        assert!(
+            event_types1.contains("exited"),
+            "expected exited event for group 1"
+        );
+        assert!(
+            event_types1.contains("buffer_funded"),
+            "expected buffer_funded event for group 1"
+        );
+
+        let group2 = db
+            .portfolio_group_by_id(2)
+            .await
+            .unwrap()
+            .expect("group 2 must exist");
+        assert_eq!(group2.id, 2);
+        assert_eq!(group2.finalized, 1, "group 2 must be finalized");
+        let events2 = db.portfolio_events_for_group(2, 200).await.unwrap();
+        let event_types2: HashSet<&str> = events2.iter().map(|e| e.event_type.as_str()).collect();
+        assert!(
+            event_types2.contains("finalized"),
+            "expected finalized event for group 2"
+        );
+        assert!(
+            event_types2.contains("settled"),
+            "expected settled event for group 2"
+        );
+
+        let count_before_replay = db.portfolio_events_for_group(1, 200).await.unwrap().len();
+        let count_before_replay2 = db.portfolio_events_for_group(2, 200).await.unwrap().len();
+
+        // 6. Replay all logs to verify idempotence
+        for log in &ordered_logs {
+            let topic0 = match log.topics().first().copied() {
+                Some(t) => t,
+                None => continue,
+            };
+            let block = log.block_number.unwrap_or_default();
+            let tx_hash = log
+                .transaction_hash
+                .map(|h| format!("{h:#x}"))
+                .unwrap_or_default();
+            let log_index = log.log_index.unwrap_or_default();
+            let timestamp = *block_timestamps.get(&block).unwrap_or(&1000);
+            let meta = LogMeta {
+                tx_hash,
+                log_index: log_index as i64,
+                block: block as i64,
+                timestamp,
+            };
+            process_portfolio_market_log(&app_state, &mut vaults, log, topic0, &meta)
+                .await
+                .unwrap();
+        }
+        let all_groups = db.portfolio_groups_all().await.unwrap();
+        assert_eq!(
+            all_groups.len(),
+            2,
+            "replaying logs must not duplicate group rows"
+        );
+
+        let count_after_replay = db.portfolio_events_for_group(1, 200).await.unwrap().len();
+        let count_after_replay2 = db.portfolio_events_for_group(2, 200).await.unwrap().len();
+        assert_eq!(
+            count_after_replay, count_before_replay,
+            "replaying must not duplicate events for group 1"
+        );
+        assert_eq!(
+            count_after_replay2, count_before_replay2,
+            "replaying must not duplicate events for group 2"
+        );
+
+        // Verify group balances remain exact after replay
+        let group1_replayed = db.portfolio_group_by_id(1).await.unwrap().unwrap();
+
+        assert_eq!(group1_replayed.high_outstanding, group1.high_outstanding);
+        assert_eq!(group1_replayed.calm_outstanding, group1.calm_outstanding);
+        assert_eq!(group1_replayed.reserve_locked, group1.reserve_locked);
+        assert_eq!(group1_replayed.exit_buffer, group1.exit_buffer);
+
+        // 7. Compare persisted state with live on-chain groupView
+        let market =
+            crate::abi::TremorPortfolioMarket::new(manifest.portfolio_market, provider.clone());
+        let view1 = market.groupView(U256::from(1)).call().await.unwrap();
+        assert_eq!(view1.highOutstanding.to_string(), group1.high_outstanding);
+        assert_eq!(view1.calmOutstanding.to_string(), group1.calm_outstanding);
+        assert_eq!(view1.reserveLocked.to_string(), group1.reserve_locked);
+        assert_eq!(view1.exitBuffer.to_string(), group1.exit_buffer);
+
+        let view2 = market.groupView(U256::from(2)).call().await.unwrap();
+        assert_eq!(view2.finalized, group2.finalized == 1);
+        assert_eq!(
+            view2.finalVariance.to_string(),
+            group2.final_variance.unwrap()
+        );
+        assert_eq!(view2.highPpu.to_string(), group2.high_ppu.unwrap());
+        assert_eq!(view2.calmPpu.to_string(), group2.calm_ppu.unwrap());
+        assert_eq!(view2.highOutstanding.to_string(), group2.high_outstanding);
+        assert_eq!(view2.calmOutstanding.to_string(), group2.calm_outstanding);
+        assert_eq!(view2.reserveLocked.to_string(), group2.reserve_locked);
+        assert_eq!(view2.exitBuffer.to_string(), group2.exit_buffer);
+        assert_eq!(group2.exit_buffer, "0", "finalized exitBuffer must be zero");
+
+        // 8. Verify WorthlessBurned event row fields and confirm replay idempotence specifically
+        // for the burn log. The exact pre→post decrement was already verified inline in step 4.
+        // Chain-state reconciliation (DB == groupView) was verified in step 7 above.
+        let burn_filter = Filter::new()
+            .address(manifest.portfolio_market)
+            .event_signature(worthless_sig)
+            .from_block(manifest.deployment_block);
+        let burn_logs = provider
+            .get_logs(&burn_filter)
+            .await
+            .expect("get_logs for WorthlessBurned must succeed");
+        assert!(
+            !burn_logs.is_empty(),
+            "Expected at least 1 mined WorthlessBurned event on chain, but found 0"
+        );
+        let mined_burn_log = &burn_logs[0];
+        let burn_ev = mined_burn_log
+            .log_decode::<crate::abi::TremorPortfolioMarket::WorthlessBurned>()
+            .expect("decode mined WorthlessBurned")
+            .inner
+            .data;
+        assert_eq!(
+            burn_ev.groupId,
+            U256::from(1),
+            "Expected WorthlessBurned on group 1"
+        );
+        assert!(burn_ev.high, "Expected WorthlessBurned on high side");
+        assert!(burn_ev.units > U256::ZERO, "Burned units must be positive");
+
+        let burn_block = mined_burn_log.block_number.unwrap_or_default();
+        let burn_tx_hash = mined_burn_log
+            .transaction_hash
+            .map(|h| format!("{h:#x}"))
+            .unwrap_or_default();
+        let burn_log_index = mined_burn_log.log_index.unwrap_or_default();
+        let burn_timestamp = match block_timestamps.get(&burn_block) {
+            Some(t) => *t,
+            None => {
+                let blk = provider
+                    .get_block_by_number(burn_block.into())
+                    .await
+                    .expect("get_block_by_number for burn must succeed")
+                    .expect("burn block must exist");
+                blk.header.timestamp as i64
+            }
+        };
+        let mined_burn_meta = LogMeta {
+            tx_hash: burn_tx_hash,
+            log_index: burn_log_index as i64,
+            block: burn_block as i64,
+            timestamp: burn_timestamp,
+        };
+
+        // Verify event row was indexed with correct fields during step 4.
+        let g1_events = db.portfolio_events_for_group(1, 200).await.unwrap();
+        let worthless_row = g1_events
+            .iter()
+            .find(|e| e.event_type == "worthless_burned")
+            .expect("worthless_burned event must be recorded by step 4 ingestion");
+        assert_eq!(
+            worthless_row.units,
+            burn_ev.units.to_string(),
+            "indexed units match event"
+        );
+        assert_eq!(
+            worthless_row.side.as_deref(),
+            Some("high"),
+            "indexed side is high"
+        );
+        let expected_actor = hex_addr(burn_ev.holder);
+        assert_eq!(
+            worthless_row.actor.as_deref(),
+            Some(expected_actor.as_str()),
+            "indexed actor matches holder"
+        );
+
+        // Replay the mined WorthlessBurned log: no duplicate event row, no duplicate deduction.
+        let high_before_burn_replay: U256 = group1.high_outstanding.parse().unwrap();
+        let count_before_burn_replay = g1_events.len();
+        process_portfolio_market_log(
+            &app_state,
+            &mut vaults,
+            mined_burn_log,
+            worthless_sig,
+            &mined_burn_meta,
+        )
+        .await
+        .unwrap();
+        let count_after_burn_replay = db.portfolio_events_for_group(1, 200).await.unwrap().len();
+        assert_eq!(
+            count_after_burn_replay, count_before_burn_replay,
+            "replaying mined worthless burn must not add a duplicate event row"
+        );
+        let g1_post_burn_replay = db.portfolio_group_by_id(1).await.unwrap().unwrap();
+        let high_after_burn_replay: U256 = g1_post_burn_replay.high_outstanding.parse().unwrap();
+        assert_eq!(
+            high_after_burn_replay, high_before_burn_replay,
+            "replay must not duplicate the supply deduction: \
+             high_outstanding must remain {} not {}",
+            high_before_burn_replay, high_after_burn_replay
+        );
+        assert_eq!(
+            g1_post_burn_replay.calm_outstanding, group1.calm_outstanding,
+            "calm_outstanding unchanged after replay"
+        );
+        assert_eq!(
+            g1_post_burn_replay.reserve_locked, group1.reserve_locked,
+            "reserve_locked unchanged after replay"
+        );
+        assert_eq!(
+            g1_post_burn_replay.exit_buffer, "0",
+            "exit_buffer unchanged after replay"
+        );
     }
 }

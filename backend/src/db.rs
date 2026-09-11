@@ -16,9 +16,8 @@ use sqlx::{Row, SqlitePool};
 use crate::chainlink::Round;
 use crate::util::{nonnegative_u64, sqlite_i64};
 
-/// Bumped whenever a table's shape changes. v1 was the unsecured-writer design (seller-as-maker,
-/// premium/settlement legs, no vaults, no checkpoints).
-const SCHEMA_VERSION: i64 = 2;
+/// Bumped whenever a table's shape changes. v3 adds portfolio risk groups and events.
+const SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -185,11 +184,81 @@ CREATE TABLE IF NOT EXISTS round_coverage (
     lo    INTEGER NOT NULL,
     hi    INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS portfolio_groups (
+    id                    INTEGER PRIMARY KEY,
+    writer                TEXT NOT NULL,
+    vault                 TEXT NOT NULL,
+    high_receipt          TEXT NOT NULL,
+    calm_receipt          TEXT NOT NULL,
+    feed                  TEXT NOT NULL,
+    quote_token           TEXT NOT NULL,
+    start                 INTEGER NOT NULL,
+    expiry                INTEGER NOT NULL,
+    sale_end              INTEGER NOT NULL,
+    sample_interval       INTEGER NOT NULL,
+    cap_variance          TEXT NOT NULL,
+    cap_payout_per_unit   TEXT NOT NULL,
+    max_units_per_side    TEXT NOT NULL,
+    ask_high              TEXT NOT NULL,
+    bid_high              TEXT NOT NULL,
+    ask_calm              TEXT NOT NULL,
+    bid_calm              TEXT NOT NULL,
+    high_outstanding      TEXT NOT NULL DEFAULT '0',
+    calm_outstanding      TEXT NOT NULL DEFAULT '0',
+    reserve_locked        TEXT NOT NULL DEFAULT '0',
+    exit_buffer           TEXT NOT NULL DEFAULT '0',
+    finalized             INTEGER NOT NULL DEFAULT 0,
+    final_variance        TEXT,
+    high_ppu              TEXT,
+    calm_ppu              TEXT,
+    created_block         INTEGER NOT NULL,
+    created_tx            TEXT NOT NULL,
+    created_at            INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS portfolio_groups_writer ON portfolio_groups(writer);
+CREATE INDEX IF NOT EXISTS portfolio_groups_vault  ON portfolio_groups(vault);
+
+CREATE TABLE IF NOT EXISTS portfolio_events (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id         INTEGER NOT NULL,
+    event_type       TEXT NOT NULL,
+    actor            TEXT,
+    side             TEXT,
+    units            TEXT NOT NULL DEFAULT '0',
+    amount           TEXT NOT NULL DEFAULT '0',
+    new_outstanding  TEXT,
+    new_reserve      TEXT,
+    new_buffer       TEXT,
+    block_number     INTEGER NOT NULL,
+    tx_hash          TEXT NOT NULL,
+    log_index        INTEGER NOT NULL,
+    timestamp        INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS portfolio_events_unique ON portfolio_events(tx_hash, log_index);
+CREATE INDEX IF NOT EXISTS portfolio_events_group ON portfolio_events(group_id, timestamp);
+
+CREATE TABLE IF NOT EXISTS portfolio_checkpoints (
+    tx_hash             TEXT NOT NULL,
+    log_index           INTEGER NOT NULL,
+    block               INTEGER NOT NULL,
+    timestamp           INTEGER NOT NULL,
+    group_id            INTEGER NOT NULL,
+    from_sample         INTEGER NOT NULL,
+    to_sample           INTEGER NOT NULL,
+    processed_through   INTEGER NOT NULL,
+    last_round_id       TEXT NOT NULL,
+    sum_squared_returns TEXT NOT NULL,
+    PRIMARY KEY (tx_hash, log_index)
+);
+CREATE INDEX IF NOT EXISTS portfolio_checkpoints_group ON portfolio_checkpoints(group_id, processed_through);
 "#;
 
 /// Chain-derived tables, in dependency-free order. Round caches are kept across a reset: they are a
 /// cache of immutable feed history, not of Tremor state.
 const CHAIN_TABLES: &[&str] = &[
+    "portfolio_events",
+    "portfolio_checkpoints",
+    "portfolio_groups",
     "fills",
     "checkpoints",
     "finalizations",
@@ -201,11 +270,19 @@ const CHAIN_TABLES: &[&str] = &[
     "cursor",
 ];
 
-/// Every table a v1 database had that v2 replaces outright.
+/// Every table dropped on explicit --reset-db.
 const V1_TABLES: &[&str] = &[
+    "portfolio_events",
+    "portfolio_checkpoints",
+    "portfolio_groups",
     "fills",
     "aqua_events",
     "series",
+    "orders",
+    "vaults",
+    "vault_events",
+    "checkpoints",
+    "finalizations",
     "cursor",
     "rounds",
     "phases",
@@ -352,6 +429,71 @@ pub struct AquaEventRow {
     pub token: Option<String>,
     pub amount: Option<String>,
     pub strategy: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, sqlx::FromRow)]
+pub struct PortfolioGroupRow {
+    pub id: i64,
+    pub writer: String,
+    pub vault: String,
+    pub high_receipt: String,
+    pub calm_receipt: String,
+    pub feed: String,
+    pub quote_token: String,
+    pub start: i64,
+    pub expiry: i64,
+    pub sale_end: i64,
+    pub sample_interval: i64,
+    pub cap_variance: String,
+    pub cap_payout_per_unit: String,
+    pub max_units_per_side: String,
+    pub ask_high: String,
+    pub bid_high: String,
+    pub ask_calm: String,
+    pub bid_calm: String,
+    pub high_outstanding: String,
+    pub calm_outstanding: String,
+    pub reserve_locked: String,
+    pub exit_buffer: String,
+    pub finalized: i64,
+    pub final_variance: Option<String>,
+    pub high_ppu: Option<String>,
+    pub calm_ppu: Option<String>,
+    pub created_block: i64,
+    pub created_tx: String,
+    pub created_at: i64,
+}
+
+#[derive(Clone, Debug, Serialize, sqlx::FromRow)]
+pub struct PortfolioEventRow {
+    pub id: i64,
+    pub group_id: i64,
+    pub event_type: String,
+    pub actor: Option<String>,
+    pub side: Option<String>,
+    pub units: String,
+    pub amount: String,
+    pub new_outstanding: Option<String>,
+    pub new_reserve: Option<String>,
+    pub new_buffer: Option<String>,
+    pub block_number: i64,
+    pub tx_hash: String,
+    pub log_index: i64,
+    pub timestamp: i64,
+}
+
+#[derive(Clone, Debug, Serialize, sqlx::FromRow)]
+pub struct PortfolioCheckpointRow {
+    pub tx_hash: String,
+    pub log_index: i64,
+    pub block: i64,
+    pub timestamp: i64,
+    pub group_id: i64,
+    pub from_sample: i64,
+    pub to_sample: i64,
+    pub processed_through: i64,
+    pub last_round_id: String,
+    pub sum_squared_returns: String,
 }
 
 /// Per-series volume, separated by leg. Issuance money flows into the vault; exit and settlement flow
@@ -962,6 +1104,245 @@ impl Db {
         .await?)
     }
 
+    // ---- portfolio groups and events ----------------------------------------------------
+
+    pub async fn insert_portfolio_group(&self, g: &PortfolioGroupRow) -> Result<()> {
+        sqlx::query(
+            "INSERT OR IGNORE INTO portfolio_groups (
+                id, writer, vault, high_receipt, calm_receipt, feed, quote_token,
+                start, expiry, sale_end, sample_interval, cap_variance, cap_payout_per_unit,
+                max_units_per_side, ask_high, bid_high, ask_calm, bid_calm,
+                high_outstanding, calm_outstanding, reserve_locked, exit_buffer,
+                finalized, final_variance, high_ppu, calm_ppu, created_block, created_tx, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(g.id)
+        .bind(&g.writer)
+        .bind(&g.vault)
+        .bind(&g.high_receipt)
+        .bind(&g.calm_receipt)
+        .bind(&g.feed)
+        .bind(&g.quote_token)
+        .bind(g.start)
+        .bind(g.expiry)
+        .bind(g.sale_end)
+        .bind(g.sample_interval)
+        .bind(&g.cap_variance)
+        .bind(&g.cap_payout_per_unit)
+        .bind(&g.max_units_per_side)
+        .bind(&g.ask_high)
+        .bind(&g.bid_high)
+        .bind(&g.ask_calm)
+        .bind(&g.bid_calm)
+        .bind(&g.high_outstanding)
+        .bind(&g.calm_outstanding)
+        .bind(&g.reserve_locked)
+        .bind(&g.exit_buffer)
+        .bind(g.finalized)
+        .bind(&g.final_variance)
+        .bind(&g.high_ppu)
+        .bind(&g.calm_ppu)
+        .bind(g.created_block)
+        .bind(&g.created_tx)
+        .bind(g.created_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn update_portfolio_group_balances(
+        &self,
+        group_id: i64,
+        high_outstanding: Option<&str>,
+        calm_outstanding: Option<&str>,
+        reserve_locked: Option<&str>,
+        exit_buffer: Option<&str>,
+    ) -> Result<()> {
+        let mut q = "UPDATE portfolio_groups SET id = id".to_string();
+        if high_outstanding.is_some() {
+            q.push_str(", high_outstanding = ?");
+        }
+        if calm_outstanding.is_some() {
+            q.push_str(", calm_outstanding = ?");
+        }
+        if reserve_locked.is_some() {
+            q.push_str(", reserve_locked = ?");
+        }
+        if exit_buffer.is_some() {
+            q.push_str(", exit_buffer = ?");
+        }
+        q.push_str(" WHERE id = ?");
+
+        let mut query = sqlx::query(&q);
+        if let Some(h) = high_outstanding {
+            query = query.bind(h);
+        }
+        if let Some(c) = calm_outstanding {
+            query = query.bind(c);
+        }
+        if let Some(r) = reserve_locked {
+            query = query.bind(r);
+        }
+        if let Some(b) = exit_buffer {
+            query = query.bind(b);
+        }
+        query.bind(group_id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn deduct_portfolio_units(
+        &self,
+        group_id: i64,
+        high: bool,
+        units: &str,
+        reserve_locked: &str,
+        buffer_drawn: Option<&str>,
+    ) -> Result<()> {
+        let u: alloy::primitives::U256 = units.parse().context("units U256")?;
+        if let Some(group) = self.portfolio_group_by_id(group_id).await? {
+            let (new_high, new_calm) = if high {
+                let cur: alloy::primitives::U256 =
+                    group.high_outstanding.parse().unwrap_or_default();
+                let n = cur.saturating_sub(u);
+                (Some(n.to_string()), None)
+            } else {
+                let cur: alloy::primitives::U256 =
+                    group.calm_outstanding.parse().unwrap_or_default();
+                let n = cur.saturating_sub(u);
+                (None, Some(n.to_string()))
+            };
+            let new_buf = if let Some(drawn_str) = buffer_drawn {
+                let drawn: alloy::primitives::U256 = drawn_str.parse().unwrap_or_default();
+                let cur_buf: alloy::primitives::U256 =
+                    group.exit_buffer.parse().unwrap_or_default();
+                Some(cur_buf.saturating_sub(drawn).to_string())
+            } else {
+                None
+            };
+            self.update_portfolio_group_balances(
+                group_id,
+                new_high.as_deref(),
+                new_calm.as_deref(),
+                Some(reserve_locked),
+                new_buf.as_deref(),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn finalize_portfolio_group(
+        &self,
+        group_id: i64,
+        final_variance: &str,
+        high_ppu: &str,
+        calm_ppu: &str,
+        final_reserve: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE portfolio_groups SET finalized = 1, final_variance = ?, high_ppu = ?, calm_ppu = ?, reserve_locked = ?, exit_buffer = '0' WHERE id = ?",
+        )
+        .bind(final_variance)
+        .bind(high_ppu)
+        .bind(calm_ppu)
+        .bind(final_reserve)
+        .bind(group_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn insert_portfolio_event(&self, e: &PortfolioEventRow) -> Result<bool> {
+        let res = sqlx::query(
+            "INSERT OR IGNORE INTO portfolio_events (
+                group_id, event_type, actor, side, units, amount,
+                new_outstanding, new_reserve, new_buffer, block_number, tx_hash, log_index, timestamp
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(e.group_id)
+        .bind(&e.event_type)
+        .bind(&e.actor)
+        .bind(&e.side)
+        .bind(&e.units)
+        .bind(&e.amount)
+        .bind(&e.new_outstanding)
+        .bind(&e.new_reserve)
+        .bind(&e.new_buffer)
+        .bind(e.block_number)
+        .bind(&e.tx_hash)
+        .bind(e.log_index)
+        .bind(e.timestamp)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    pub async fn insert_portfolio_checkpoint(&self, c: &PortfolioCheckpointRow) -> Result<()> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO portfolio_checkpoints (
+                tx_hash, log_index, block, timestamp, group_id, from_sample,
+                to_sample, processed_through, last_round_id, sum_squared_returns
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&c.tx_hash)
+        .bind(c.log_index)
+        .bind(c.block)
+        .bind(c.timestamp)
+        .bind(c.group_id)
+        .bind(c.from_sample)
+        .bind(c.to_sample)
+        .bind(c.processed_through)
+        .bind(&c.last_round_id)
+        .bind(&c.sum_squared_returns)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn portfolio_group_by_id(&self, group_id: i64) -> Result<Option<PortfolioGroupRow>> {
+        Ok(
+            sqlx::query_as::<_, PortfolioGroupRow>("SELECT * FROM portfolio_groups WHERE id = ?")
+                .bind(group_id)
+                .fetch_optional(&self.pool)
+                .await?,
+        )
+    }
+
+    pub async fn portfolio_groups_all(&self) -> Result<Vec<PortfolioGroupRow>> {
+        Ok(sqlx::query_as::<_, PortfolioGroupRow>(
+            "SELECT * FROM portfolio_groups ORDER BY id DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    pub async fn portfolio_events_for_group(
+        &self,
+        group_id: i64,
+        limit: u64,
+    ) -> Result<Vec<PortfolioEventRow>> {
+        let limit = i64::try_from(limit).context("portfolio event limit exceeds sqlite range")?;
+        Ok(sqlx::query_as::<_, PortfolioEventRow>(
+            "SELECT * FROM portfolio_events WHERE group_id = ? ORDER BY block_number DESC, log_index DESC LIMIT ?",
+        )
+        .bind(group_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    pub async fn portfolio_checkpoints_for_group(
+        &self,
+        group_id: i64,
+    ) -> Result<Vec<PortfolioCheckpointRow>> {
+        Ok(sqlx::query_as::<_, PortfolioCheckpointRow>(
+            "SELECT * FROM portfolio_checkpoints WHERE group_id = ? ORDER BY to_sample ASC",
+        )
+        .bind(group_id)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
     // ---- chainlink rounds cache ---------------------------------------------------------
 
     pub async fn rounds_for_phase(&self, feed: Address, phase: u16) -> Result<Vec<Round>> {
@@ -1218,5 +1599,434 @@ mod tests {
         db.reset_chain_state().await.unwrap();
         assert!(db.orders_all().await.unwrap().is_empty());
         assert_eq!(db.phase_last(Address::ZERO, 3).await.unwrap(), Some(42));
+    }
+
+    // ---- Portfolio indexer database unit tests -----------------------------------------------
+
+    #[tokio::test]
+    async fn same_transaction_group_discovery_and_subsequent_events() {
+        let db = Db::connect_memory().await.unwrap();
+        let group = PortfolioGroupRow {
+            id: 1,
+            writer: "0xwriter".into(),
+            vault: "0xvault".into(),
+            high_receipt: "0xhigh".into(),
+            calm_receipt: "0xcalm".into(),
+            feed: "0xfeed".into(),
+            quote_token: "0xquote".into(),
+            start: 1000,
+            expiry: 2000,
+            sale_end: 2000,
+            sample_interval: 7200,
+            cap_variance: "1000000000000000000".into(),
+            cap_payout_per_unit: "1000000".into(),
+            max_units_per_side: "1000000000000000000000".into(),
+            ask_high: "300000".into(),
+            bid_high: "250000".into(),
+            ask_calm: "750000".into(),
+            bid_calm: "700000".into(),
+            high_outstanding: "0".into(),
+            calm_outstanding: "0".into(),
+            reserve_locked: "0".into(),
+            exit_buffer: "0".into(),
+            finalized: 0,
+            final_variance: None,
+            high_ppu: None,
+            calm_ppu: None,
+            created_block: 100,
+            created_tx: "0xtx1".into(),
+            created_at: 1000,
+        };
+        db.insert_portfolio_group(&group).await.unwrap();
+
+        // PortfolioIssued (HIGH) in same block
+        let ev1 = PortfolioEventRow {
+            id: 0,
+            group_id: 1,
+            event_type: "issue".into(),
+            side: Some("HIGH".into()),
+            actor: Some("0xbuyer1".into()),
+            units: "100000000000000000000".into(),
+            amount: "30000000".into(),
+            new_outstanding: Some("100000000000000000000".into()),
+            new_reserve: Some("100000000".into()),
+            new_buffer: None,
+            block_number: 100,
+            tx_hash: "0xtx1".into(),
+            log_index: 1,
+            timestamp: 1000,
+        };
+        db.insert_portfolio_event(&ev1).await.unwrap();
+        db.update_portfolio_group_balances(
+            1,
+            Some("100000000000000000000"),
+            None,
+            Some("100000000"),
+            None,
+        )
+        .await
+        .unwrap();
+
+        // PortfolioIssued (CALM) in same block
+        let ev2 = PortfolioEventRow {
+            id: 0,
+            group_id: 1,
+            event_type: "issue".into(),
+            side: Some("CALM".into()),
+            actor: Some("0xbuyer2".into()),
+            units: "100000000000000000000".into(),
+            amount: "75000000".into(),
+            new_outstanding: Some("100000000000000000000".into()),
+            new_reserve: Some("100000000".into()),
+            new_buffer: None,
+            block_number: 100,
+            tx_hash: "0xtx1".into(),
+            log_index: 2,
+            timestamp: 1000,
+        };
+        db.insert_portfolio_event(&ev2).await.unwrap();
+        db.update_portfolio_group_balances(
+            1,
+            None,
+            Some("100000000000000000000"),
+            Some("100000000"),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let fetched = db.portfolio_group_by_id(1).await.unwrap().unwrap();
+        assert_eq!(fetched.high_outstanding, "100000000000000000000");
+        assert_eq!(fetched.calm_outstanding, "100000000000000000000");
+        assert_eq!(fetched.reserve_locked, "100000000");
+        assert_eq!(fetched.exit_buffer, "0");
+
+        let events = db.portfolio_events_for_group(1, 10).await.unwrap();
+        assert_eq!(events.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn duplicate_replay_idempotence() {
+        let db = Db::connect_memory().await.unwrap();
+        let group = PortfolioGroupRow {
+            id: 1,
+            writer: "0xwriter".into(),
+            vault: "0xvault".into(),
+            high_receipt: "0xhigh".into(),
+            calm_receipt: "0xcalm".into(),
+            feed: "0xfeed".into(),
+            quote_token: "0xquote".into(),
+            start: 1000,
+            expiry: 2000,
+            sale_end: 2000,
+            sample_interval: 7200,
+            cap_variance: "1000000000000000000".into(),
+            cap_payout_per_unit: "1000000".into(),
+            max_units_per_side: "1000000000000000000000".into(),
+            ask_high: "300000".into(),
+            bid_high: "250000".into(),
+            ask_calm: "750000".into(),
+            bid_calm: "700000".into(),
+            high_outstanding: "0".into(),
+            calm_outstanding: "0".into(),
+            reserve_locked: "0".into(),
+            exit_buffer: "0".into(),
+            finalized: 0,
+            final_variance: None,
+            high_ppu: None,
+            calm_ppu: None,
+            created_block: 100,
+            created_tx: "0xtx1".into(),
+            created_at: 1000,
+        };
+        // Replaying GroupCreated must succeed without error (INSERT OR IGNORE)
+        db.insert_portfolio_group(&group).await.unwrap();
+        db.insert_portfolio_group(&group).await.unwrap();
+
+        let all = db.portfolio_groups_all().await.unwrap();
+        assert_eq!(
+            all.len(),
+            1,
+            "replaying group creation must not duplicate rows"
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_cursor_recovery() {
+        let db = Db::connect_memory().await.unwrap();
+        assert!(db.cursor().await.unwrap().is_none());
+
+        // Store progress
+        db.set_cursor(
+            51129799,
+            None,
+            50000000,
+            Address::repeat_byte(0xcc),
+            Some(31337),
+        )
+        .await
+        .unwrap();
+        let c1 = db.cursor().await.unwrap().unwrap();
+        assert_eq!(c1.last_block, 51129799);
+
+        // Advance progress
+        db.set_cursor(
+            51129850,
+            None,
+            50000000,
+            Address::repeat_byte(0xcc),
+            Some(31337),
+        )
+        .await
+        .unwrap();
+        let c2 = db.cursor().await.unwrap().unwrap();
+        assert_eq!(c2.last_block, 51129850);
+    }
+
+    #[tokio::test]
+    async fn exit_buffer_accounting_lifecycle() {
+        let db = Db::connect_memory().await.unwrap();
+        let group = PortfolioGroupRow {
+            id: 1,
+            writer: "0xwriter".into(),
+            vault: "0xvault".into(),
+            high_receipt: "0xhigh".into(),
+            calm_receipt: "0xcalm".into(),
+            feed: "0xfeed".into(),
+            quote_token: "0xquote".into(),
+            start: 1000,
+            expiry: 2000,
+            sale_end: 2000,
+            sample_interval: 7200,
+            cap_variance: "1000000000000000000".into(),
+            cap_payout_per_unit: "1000000".into(),
+            max_units_per_side: "1000000000000000000000".into(),
+            ask_high: "300000".into(),
+            bid_high: "250000".into(),
+            ask_calm: "750000".into(),
+            bid_calm: "700000".into(),
+            high_outstanding: "100000000000000000000".into(),
+            calm_outstanding: "100000000000000000000".into(),
+            reserve_locked: "100000000".into(),
+            exit_buffer: "0".into(),
+            finalized: 0,
+            final_variance: None,
+            high_ppu: None,
+            calm_ppu: None,
+            created_block: 100,
+            created_tx: "0xtx1".into(),
+            created_at: 1000,
+        };
+        db.insert_portfolio_group(&group).await.unwrap();
+
+        // 1. Fund exit buffer with 5 USDC (5_000_000)
+        let fund_ev = PortfolioEventRow {
+            id: 0,
+            group_id: 1,
+            event_type: "buffer_fund".into(),
+            side: None,
+            actor: Some("0xwriter".into()),
+            units: "0".into(),
+            amount: "5000000".into(),
+            new_outstanding: None,
+            new_reserve: None,
+            new_buffer: Some("5000000".into()),
+            block_number: 101,
+            tx_hash: "0xtx2".into(),
+            log_index: 0,
+            timestamp: 1010,
+        };
+        db.insert_portfolio_event(&fund_ev).await.unwrap();
+        db.update_portfolio_group_balances(1, None, None, None, Some("5000000"))
+            .await
+            .unwrap();
+
+        let g1 = db.portfolio_group_by_id(1).await.unwrap().unwrap();
+        assert_eq!(g1.exit_buffer, "5000000");
+
+        // 2. PortfolioExited: 20 HIGH exited, draws 5 USDC from buffer, reserve untouched at 100 USDC (max(80, 100))
+        let exit_ev = PortfolioEventRow {
+            id: 0,
+            group_id: 1,
+            event_type: "exit".into(),
+            side: Some("HIGH".into()),
+            actor: Some("0xbuyer1".into()),
+            units: "20000000000000000000".into(),
+            amount: "5000000".into(),
+            new_outstanding: Some("80000000000000000000".into()),
+            new_reserve: Some("100000000".into()),
+            new_buffer: Some("0".into()),
+            block_number: 102,
+            tx_hash: "0xtx3".into(),
+            log_index: 0,
+            timestamp: 1020,
+        };
+        db.insert_portfolio_event(&exit_ev).await.unwrap();
+        db.update_portfolio_group_balances(
+            1,
+            Some("80000000000000000000"),
+            None,
+            Some("100000000"),
+            Some("0"),
+        )
+        .await
+        .unwrap();
+
+        let g2 = db.portfolio_group_by_id(1).await.unwrap().unwrap();
+        assert_eq!(g2.high_outstanding, "80000000000000000000");
+        assert_eq!(g2.exit_buffer, "0");
+        assert_eq!(g2.reserve_locked, "100000000");
+
+        // 3. Fund buffer again and withdraw
+        db.update_portfolio_group_balances(1, None, None, None, Some("10000000"))
+            .await
+            .unwrap();
+        let withdraw_ev = PortfolioEventRow {
+            id: 0,
+            group_id: 1,
+            event_type: "buffer_withdraw".into(),
+            side: None,
+            actor: Some("0xwriter".into()),
+            units: "0".into(),
+            amount: "10000000".into(),
+            new_outstanding: None,
+            new_reserve: None,
+            new_buffer: Some("0".into()),
+            block_number: 103,
+            tx_hash: "0xtx4".into(),
+            log_index: 0,
+            timestamp: 1030,
+        };
+        db.insert_portfolio_event(&withdraw_ev).await.unwrap();
+        db.update_portfolio_group_balances(1, None, None, None, Some("0"))
+            .await
+            .unwrap();
+
+        let g3 = db.portfolio_group_by_id(1).await.unwrap().unwrap();
+        assert_eq!(g3.exit_buffer, "0");
+    }
+
+    #[tokio::test]
+    async fn finalization_and_worthless_burn() {
+        let db = Db::connect_memory().await.unwrap();
+        let group = PortfolioGroupRow {
+            id: 2,
+            writer: "0xwriter".into(),
+            vault: "0xvault".into(),
+            high_receipt: "0xhigh".into(),
+            calm_receipt: "0xcalm".into(),
+            feed: "0xfeed".into(),
+            quote_token: "0xquote".into(),
+            start: 1000,
+            expiry: 2000,
+            sale_end: 2000,
+            sample_interval: 7200,
+            cap_variance: "1000000000000000000".into(),
+            cap_payout_per_unit: "1000000".into(),
+            max_units_per_side: "1000000000000000000000".into(),
+            ask_high: "300000".into(),
+            bid_high: "250000".into(),
+            ask_calm: "750000".into(),
+            bid_calm: "700000".into(),
+            high_outstanding: "100000000000000000000".into(),
+            calm_outstanding: "100000000000000000000".into(),
+            reserve_locked: "100000000".into(),
+            exit_buffer: "0".into(),
+            finalized: 0,
+            final_variance: None,
+            high_ppu: None,
+            calm_ppu: None,
+            created_block: 200,
+            created_tx: "0xtx20".into(),
+            created_at: 2000,
+        };
+        db.insert_portfolio_group(&group).await.unwrap();
+
+        // Finalize group at 0% variance: HIGH ppu = 0, CALM ppu = 1_000_000 (1 USDC)
+        db.finalize_portfolio_group(2, "0", "0", "1000000", "0")
+            .await
+            .unwrap();
+
+        let finalized_group = db.portfolio_group_by_id(2).await.unwrap().unwrap();
+        assert_eq!(finalized_group.finalized, 1);
+        assert_eq!(finalized_group.final_variance, Some("0".to_string()));
+        assert_eq!(finalized_group.high_ppu, Some("0".to_string()));
+        assert_eq!(finalized_group.calm_ppu, Some("1000000".to_string()));
+
+        // Worthless burn for HIGH
+        let burn_ev = PortfolioEventRow {
+            id: 0,
+            group_id: 2,
+            event_type: "worthless_burn".into(),
+            side: Some("HIGH".into()),
+            actor: Some("0xholder".into()),
+            units: "100000000000000000000".into(),
+            amount: "0".into(),
+            new_outstanding: Some("0".into()),
+            new_reserve: None,
+            new_buffer: None,
+            block_number: 210,
+            tx_hash: "0xtx21".into(),
+            log_index: 0,
+            timestamp: 2100,
+        };
+        db.insert_portfolio_event(&burn_ev).await.unwrap();
+        db.update_portfolio_group_balances(2, Some("0"), None, None, None)
+            .await
+            .unwrap();
+
+        let g_post_burn = db.portfolio_group_by_id(2).await.unwrap().unwrap();
+        assert_eq!(g_post_burn.high_outstanding, "0");
+        assert_eq!(g_post_burn.calm_outstanding, "100000000000000000000");
+    }
+
+    #[tokio::test]
+    async fn group_view_state_reconciliation() {
+        let db = Db::connect_memory().await.unwrap();
+        let row = PortfolioGroupRow {
+            id: 1,
+            writer: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266".into(),
+            vault: "0x295dd1561a33c6cd0f2cdf353ff8bffb64ec0f5c".into(),
+            high_receipt: "0x324a85216a58141373103015d9cf0cbb262ed2e5".into(),
+            calm_receipt: "0xac9035bff8e337da101e8134f397177ddd70a0a5".into(),
+            feed: "0x71041dddad3595f9ced3dccfbe3d1f4b0a16bb70".into(),
+            quote_token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913".into(),
+            start: 1789077888,
+            expiry: 1789682688,
+            sale_end: 1789682688,
+            sample_interval: 7200,
+            cap_variance: "1000000000000000000".into(),
+            cap_payout_per_unit: "1000000".into(),
+            max_units_per_side: "1000000000000000000000".into(),
+            ask_high: "300000".into(),
+            bid_high: "250000".into(),
+            ask_calm: "750000".into(),
+            bid_calm: "700000".into(),
+            high_outstanding: "80000000000000000000".into(),
+            calm_outstanding: "100000000000000000000".into(),
+            reserve_locked: "100000000".into(),
+            exit_buffer: "5000000".into(),
+            finalized: 0,
+            final_variance: None,
+            high_ppu: None,
+            calm_ppu: None,
+            created_block: 51129776,
+            created_tx: "0xc1771640633e1a6fd9d0640e2fe5ddc9ed27bad6e161e168dafd3f9539f3658a".into(),
+            created_at: 1789077902,
+        };
+        db.insert_portfolio_group(&row).await.unwrap();
+
+        let read = db.portfolio_group_by_id(1).await.unwrap().unwrap();
+        // Assert every single field matches expected types and formats
+        assert_eq!(read.id, 1);
+        assert_eq!(read.writer, row.writer);
+        assert_eq!(read.vault, row.vault);
+        assert_eq!(read.high_receipt, row.high_receipt);
+        assert_eq!(read.calm_receipt, row.calm_receipt);
+        assert_eq!(read.cap_payout_per_unit, "1000000");
+        assert_eq!(read.high_outstanding, "80000000000000000000");
+        assert_eq!(read.calm_outstanding, "100000000000000000000");
+        assert_eq!(read.reserve_locked, "100000000");
+        assert_eq!(read.exit_buffer, "5000000");
     }
 }
