@@ -1,0 +1,45 @@
+CALM CANNOT SETTLE — READ-ONLY SIMULATION, NEVER BROADCAST
+==========================================================
+`eth_call` against router.quote. No transaction, no hash.
+
+Captured:   2026-09-11 (UTC) — Base Sepolia, chain 84532
+Block:      46696864
+Target:     0xb8dcED3Cf6266Dd8fEc05849fce3734B79A7e722  (AquaSwapVMRouter)
+Order:      group 2, PMode 6 = SETTLE_CALM
+Order hash: 0x9424a267165fe7a35ee816b2dab5d770f6b4bb01ff17eae72458131f468de259
+Amount:     100000000000000000000 (100e18 CALM units), exact-in
+isAToB:     false  (receipt in; calm 0xFEB46811… > usdc 0x13a058bE…)
+
+Group 2 finalized state at simulation time:
+  finalVariance  89281490808337680      (~8.93e16, about 22x the 4e15 cap)
+  xWad           1000000000000000000    (x = 1.0 — the cap truncated)
+  highPpu        1000000                (the full cap)
+  calmPpu        0                      <-- the cause
+  highOutstanding 80e18   calmOutstanding 100e18
+
+RESULT: execution reverted
+
+  ZeroPayout(2, 6)
+
+Raw revert data:
+0xef09fd4e
+0000000000000000000000000000000000000000000000000000000000000002
+0000000000000000000000000000000000000000000000000000000000000006
+
+  selector 0xef09fd4e = ZeroPayout(uint256,uint8)   (cast sig, verified)
+  arg0 groupId = 2
+  arg1 mode    = 6 = SETTLE_CALM
+
+WHY
+---
+`_priceSettle` requires `ppu > 0`. Realized variance ran 22x above the group's cap, so x clamped to 1,
+HIGH took the entire cap payout and CALM's complement is exactly zero. A zero-output swap is not a
+meaningful fill and SwapVM should not be asked to route one, so the contract refuses.
+
+The zero side is removed with `burnWorthless(2, false, units)` instead, called by the holder directly
+against the market — no router, no Aqua, no payout. `burnWorthless` itself requires `ppu == 0` and
+reverts `PayoutNotZero` otherwise, so it can never be used to destroy a side that still owes money.
+
+This is the documented cap-truncation limitation behaving exactly as specified: a violent window
+realizes above the cap and holders of the capped side receive the cap, while the complementary side
+receives nothing.

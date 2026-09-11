@@ -1,0 +1,59 @@
+UNDERFUNDED EXIT — READ-ONLY SIMULATION, NEVER BROADCAST
+========================================================
+This is an `eth_call` (eth_call, not eth_sendRawTransaction). A reverting transaction cannot be mined,
+so THERE IS NO TRANSACTION HASH for this and there never will be. It must be presented as a simulation
+everywhere it appears.
+
+Captured:      2026-09-11 (UTC) — Base Sepolia, chain 84532
+Block:         46696315
+Chain ts:      1789160918
+Caller (--from): 0xbaAe28c72177Bc3814dd0961b9aA09fddB56B752   (buyer)
+Target:        0xb8dcED3Cf6266Dd8fEc05849fce3734B79A7e722   (AquaSwapVMRouter)
+Order:         group 2, PMode 3 = EXIT_HIGH
+Order hash:    0x2223fa7006624419870f3da2677e3ecc76dc182196cfa7c8b719396d210d71f1
+Amount:        20000000000000000000 (20e18 HIGH units), exact-in
+isAToB:        false   (receipt in; high receipt 0xA897ea80… > usdc 0x13a058bE…)
+
+Group state at simulation time (groupView(2)):
+  highOutstanding  100000000000000000000   (100)
+  calmOutstanding  100000000000000000000   (100)
+  reserveLocked    100000000               (100.000000 MockUSDC)
+  exitBuffer       0                       <-- the cause
+  standaloneCaps   200000000
+
+RESULT: execution reverted
+
+  ExitUnderfunded(2, 5000000, 0)
+
+Raw revert data:
+0x8c7ebfde000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000000000000
+
+  selector 0x8c7ebfde = ExitUnderfunded(uint256,uint256,uint256)   (cast sig, verified)
+  arg0 groupId   = 2
+  arg1 needed    = 0x4c4b40 = 5,000,000   (20e18 units x 250,000 bid / 1e18)
+  arg2 available = 0
+
+WHY THIS IS THE MECHANISM WORKING, NOT A BUG
+--------------------------------------------
+Exits pay only from (reserve released by the burn) + (the group's exit buffer). Burning 20 HIGH takes
+the group from max(100,100)=100 to max(80,100)=100 — the reserve is set by the LARGER side, and CALM is
+unchanged, so the burn releases EXACTLY ZERO. With an empty buffer there is nothing to pay from.
+
+Paying the 5,000,000 out of the reserve instead would strand CALM holders, whose claims that reserve
+backs. The contract refuses. This is the same `max(h,c)` property that makes the shared reserve
+capital-efficient, seen from its cost side: shared backing cannot be unilaterally drained by one side.
+
+Reproduce:
+  ORDER=$(cast call 0x72798A6697Cb648847ec0E5ba0bc6491B2901ddb \
+    "orderFor(uint256,uint8)((address,uint256,bytes))" 2 3 -r https://sepolia.base.org | sed 's/ \[[^]]*\]//g')
+  TD=$(cast call 0x016CEde278FFB5B2B79E9d7afe11E4d17Bb9B059 \
+    "buildTakerData(address,bool,bool,uint256,uint40,bool)(bytes)" \
+    0xbaAe28c72177Bc3814dd0961b9aA09fddB56B752 true false 0 <deadline> false \
+    -r https://sepolia.base.org | sed 's/ \[[^]]*\]//g')
+  cast call 0xb8dcED3Cf6266Dd8fEc05849fce3734B79A7e722 \
+    "swap((address,uint256,bytes),uint256,bytes)(uint256,uint256,bytes32)" \
+    "$ORDER" 20000000000000000000 "$TD" \
+    --from 0xbaAe28c72177Bc3814dd0961b9aA09fddB56B752 -r https://sepolia.base.org
+
+NOTE: only reproducible while the group is un-finalized, before expiry, and with exitBuffer == 0.
+After the buffer is allocated the same call succeeds — which is the point of the next step.

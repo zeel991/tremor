@@ -1,10 +1,6 @@
 # Portfolio demo script (v3 HIGH/CALM) — three minutes
 
-Status: the on-chain flow below is executable today as a CLI/forge demonstration
-(`forge test --match-contract PortfolioForkE2E -vv` on a Base fork, or the equivalent staged script once
-written). The frontend surfaces referenced in [brackets] are pending integration — until they exist, the
-recording uses the CLI fallback with the same beats. Nothing here is broadcast to a public chain without
-explicit authorization.
+Status: the on-chain flow below is executable as both an end-to-end staged script (`contracts/script/demo.sh` stages P1–P6) and via the live web app (`/pairs`, `/pairs/1`, `/pairs/2`, `/pairs/new`). All frontend surfaces referenced in [brackets] (vault card, portfolio reserve bar, exit buffer controls, live fills/history event feed) are fully integrated and verified against the running fork. Nothing here is broadcast to a public chain without explicit authorization.
 
 Amounts are chosen so the mechanism is visible: $100 of backing, $1 cap per unit, 100-unit positions.
 Do not overfund — the point of stage 4 is that the buyback genuinely has nothing to draw on.
@@ -18,14 +14,17 @@ Do not overfund — the point of stage 4 is that the buyback genuinely has nothi
    [Vault card: balance $100, locked $0.]
 
 2. **Sell HIGH — reservation appears** (0:20–0:45)
-   Buyer A buys 100 HIGH through the official SwapVM router for $30. The vault locks $100 — the full cap
-   of the sold claims. [Portfolio card: reserve $100, standalone caps $100, free $30.]
+   Buyer A buys 100 HIGH through the official SwapVM router for $30. The taker's $30 USDC premium pays
+   directly into the writer's vault. The vault locks $100 — the full cap of the sold claims.
+   [Portfolio card: reserve $100, standalone caps $100, vault balance $130, free cash $30.]
 
 3. **Sell CALM — the punchline** (0:45–1:20)
-   Buyer B buys 100 CALM for $75. **The reserve does not move.** HIGH's and CALM's maxima cannot occur
-   at the same outcome; the shared reserve is `max(h,c)·$1 = $100`, where two separately backed series
-   would lock $200. [Portfolio card: reserve $100, standalone caps $200, free $105.] Say precisely: this
-   is the worst-case of THIS book, not a universal 50% saving.
+   Buyer B buys 100 CALM for $75. That $75 premium pays directly into the vault. **The reserve does not move.**
+   HIGH's and CALM's maxima cannot occur at the same outcome; the shared reserve is `max(h,c)·$1 = $100`, where
+   two separately backed series would lock $200.
+   [Portfolio card: reserve $100, standalone caps $200, vault balance $205, free cash $105.] Say precisely:
+   this is the worst-case of THIS book, not a universal 50% saving. Note that free cash is unreserved balance;
+   it is not automatically allocated as an exit buffer.
 
 4. **The unsafe exit, rejected** (1:20–1:50)
    Writer withdraws the free $105 (allowed — it is not backing). Buyer A asks to sell back 20 HIGH for
@@ -41,6 +40,9 @@ Do not overfund — the point of stage 4 is that the buyback genuinely has nothi
    exit quote can disappear — settlement backing cannot.
 
 6. **Finalize once, redeem everything** (2:15–2:50)
+   To demonstrate the complete settlement lifecycle without waiting for a 7-day live series expiry,
+   the walkthrough executes against a fresh backdated risk group (created over real historical Chainlink
+   rounds, e.g. Stage P6 / Group 2).
    A third account — neither writer nor buyer — walks the observation window in bounded permissionless
    checkpoints and finalizes. ONE finalization fixes both payouts, summing to exactly $1 per complete
    set. Both buyers redeem through the router without the writer's cooperation; total payout ≤ $100;

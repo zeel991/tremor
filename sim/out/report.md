@@ -4,7 +4,7 @@ Ten scenarios against an integer replica of the deployed pricing library and the
 
 **What acceptance means here.** Not profitability in every scenario — a short-variance position loses money when variance is high, and it should. Acceptance means the accounting is solvent at every step, the behaviour is explainable, and the writer's loss is exactly the short-variance exposure they sold and nothing else.
 
-Seed `1` · generated 2026-09-10T22:06:42.459Z · 10 scenarios
+Seed `1` · generated 2026-09-10T22:26:01.292Z · 10 scenarios
 
 ## Solvency
 

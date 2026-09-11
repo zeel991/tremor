@@ -83,7 +83,7 @@ quote, and it is executable.
 
 ```
 contracts/   Foundry: the contracts above, the pricing library and its 60-digit reference vectors,
-             171 tests including stateful invariants and a Base-fork adversarial demo
+             216 tests across 20 suites, including stateful invariants and Base-fork E2E lifecycles
 backend/     Rust (axum): event indexer, Chainlink round cache, off-chain replicas, read API on :8787
 subgraph/    The Graph: the same event history as entities
 web/         Next.js 16: markets, the series terminal, the write flow, portfolio, LVR calculator, docs
@@ -116,7 +116,7 @@ would rather run one piece at a time:
 
 ```bash
 make anvil                     # terminal 1: fork Base mainnet (canonical Aqua, real USDC, real ETH/USD feed)
-make test && make demo         # terminal 2: 171 tests, then deploy + every demo stage with balance asserts
+make test && make demo         # terminal 2: 216 tests, then deploy + every demo stage with balance asserts
 make backend                   # terminal 3
 make web                       # terminal 4 → http://localhost:3000
 ```
@@ -127,20 +127,24 @@ shows all of them reverting. Stage E creates a **chain-31337-only back-dated 5-d
 Chainlink history in bounded permissionless checkpoints, finalizes, redeems and closes, asserting USDC
 deltas at every step.
 
-## Status (verified 2026-09-08)
+## Status (verified 2026-09-12)
 
 | Check | Result |
 |---|---|
-| Foundry suite, 14 suites, fuzz 128 runs | **171 passed, 0 failed** |
-| Stateful invariants | 9 invariants pass, with a scripted test proving the handler can reach every state (non-vacuity) |
-| Base-fork E2E vs canonical Aqua + real ETH/USD | pass; 61-sample window walked in 8 bounded calls, finalized, redeemed |
-| Measured gas, Base fork | checkpoint 513,002 (8 samples) · finalize 159,192 · redeem 296,021 · buy 234,481 · exit 241,866 |
+| Foundry suite, 20 suites, fuzz 128 runs | **216 passed, 0 failed, 0 skipped** |
+| Stateful invariants | 12 invariants pass across two campaigns, each with a scripted non-vacuity test proving the handler reaches every state |
+| Base-fork E2E vs canonical Aqua + real ETH/USD | pass; `ForkE2E` (161.5 s) and `PortfolioForkE2E` (168.3 s) both ran against a live Base fork |
+| Router compatibility gate | pass; `RouterCompat` proves the programs run on the pinned official router source |
 | Pricing reference vectors | 60 cases at 60 digits; Solidity and the TypeScript replicas agree exactly |
-| Contract sizes | controller 17,892 runtime / 46,484 initcode (2,668 under EIP-3860); every contract inside EIP-170 |
-| Backend | `cargo fmt`, strict clippy, 46 tests, release build — all pass |
-| Subgraph | install, codegen, build — pass |
-| Web | 25 unit tests, typecheck, ESLint, 33-route production build — all pass |
+| Contract sizes | portfolio market 20,943 runtime / 40,257 initcode; controller 17,892 / 46,684 (2,468 under EIP-3860); every contract inside EIP-170 |
+| Reproducible build vs Base Sepolia | 10/10 deployed contracts byte-identical to the local build outside immutable slots, **including `AquaSwapVMRouter`** |
+| Backend | `cargo fmt`, `clippy -D warnings`, 54 tests — all pass; live reconciliation against Base Sepolia matches `groupView(1)` exactly |
+| Subgraph | codegen, build, 4 Matchstick tests — pass |
+| Web | 47 unit tests, typecheck, ESLint, 35-page / 14-route production build — all pass |
 | Simulation | ten scenarios, no invariant failures (`sim/out/report.md`) |
+
+Known gate failures at this revision: `forge fmt --check` on two files under active edit, and
+`cargo clippy --all-targets` on two test-code lints. Full audit: [`docs/submission/FINAL_AUDIT.md`](docs/submission/FINAL_AUDIT.md).
 
 ## Honest caveats
 
@@ -155,9 +159,42 @@ deltas at every step.
   30-minute floor on the sampling grid exists because a finer grid made this common on Base.
 - **Not an order book, not a conventional variance swap, not a fair-value oracle, not a perfect LVR
   hedge.** See [trust surface](web/src/content/docs/about/trust-surface.md).
+- **The public quote token is a test token.** On Base Sepolia the quote asset is Tremor's own
+  **MockUSDC** at `0x13a058bE25Da579e0858d689F5982eDaCE8356B7` — freely mintable and worth nothing. Its
+  ERC-20 `symbol()` returns the string `"USDC"`, which is misleading in wallets and explorers. It is not
+  Circle USDC.
+- **Portfolio checkpoints are indexed by the Rust backend, not The Graph.** The subgraph's `Checkpointed`
+  handler is bound to the v2 series accumulator. The currently published Studio endpoint is stale — it
+  indexes a superseded deployment — so the app ships with the subgraph disabled until it is republished.
+- **Public evidence is currently one-sided.** Base Sepolia Group 1 proves HIGH issuance and HIGH
+  settlement through the router, plus finalization from Chainlink history. CALM issuance, the shared
+  `max(h,c)` reserve, exit buffers and EXIT are proven in local fork tests **only**. See
+  [`docs/submission/ONCHAIN_EVIDENCE.md`](docs/submission/ONCHAIN_EVIDENCE.md).
+- **Contract sources are not verified on Basescan.** A re-runnable reproducible-build check
+  (`docs/submission/evidence/verify-deployed-bytecode.py`) matches every deployed runtime to the local
+  build, but that is not the same as explorer verification.
 
 ## Deployments
 
-See `contracts/deployments/<chainId>.json` (manifest schema version 2, which pins the router's source
-commit and bytecode hash). Local fork `31337`; public Base Sepolia `84532`. Canonical Aqua on Base:
+See `contracts/deployments/<chainId>.json` — **manifest schema version 3**, which adds the portfolio
+market and portfolio accumulator and pins the router's bytecode hash. Local fork `31337`; public Base
+Sepolia `84532` (deployment block 46685189). Canonical Aqua on Base:
 `0x1111113ccf1426a8e30e2bff5e005d929bf6a90a`.
+
+Base Sepolia headline addresses — full table and live-query commands in
+[`docs/submission/ONCHAIN_EVIDENCE.md`](docs/submission/ONCHAIN_EVIDENCE.md):
+
+| Contract | Address |
+|---|---|
+| `TremorPortfolioMarket` | `0x72798A6697Cb648847ec0E5ba0bc6491B2901ddb` |
+| `AquaSwapVMRouter` (official, unmodified) | `0xb8dcED3Cf6266Dd8fEc05849fce3734B79A7e722` |
+| Aqua | `0x3B568C149DDf92Bd1f7deF40bDD8930503e70B31` |
+| Portfolio `VarianceAccumulator` | `0xea5A9Cfb462509f51420E10f5732891481fE634F` |
+| Writer maker vault | `0x9C9341d0E752a97BD1c7c47FB1579866daBCc47C` |
+| MockUSDC (**test token**) | `0x13a058bE25Da579e0858d689F5982eDaCE8356B7` |
+| Chainlink ETH/USD | `0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb1` |
+
+`routerSourceCommit` reads `"unknown"`: the vendored `contracts/lib/swap-vm` carries no `.git`, so the
+upstream commit cannot be recovered. The bytecode reproduction in
+[`docs/submission/AQUA_SWAPVM_EVIDENCE.md`](docs/submission/AQUA_SWAPVM_EVIDENCE.md) is the stronger
+claim and is re-runnable.

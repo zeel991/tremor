@@ -1,0 +1,16 @@
+# Reproducible-build provenance, Base Sepolia (84532)
+# Generated: 2026-09-11T20:13:35Z  revision: 14e3c05
+# forge forge Version: 1.8.1
+# Command: forge build && python3 ../docs/submission/evidence/verify-deployed-bytecode.py
+
+contract                  local B  chain B   diffs  imm refs  verdict
+AquaSwapVMRouter            20052    20052     282        21  identical outside immutables
+TremorPortfolioMarket       20943    20943     380        19  identical outside immutables
+VarianceSeriesFactory       17892    17892     500        25  identical outside immutables
+TremorMarketEngine           8760     8760     180         9  identical outside immutables
+TremorLens                  15184    15184     400        20  identical outside immutables
+TremorPrograms               7607     7607     200        10  identical outside immutables
+VarianceAccumulator          6858     6858     300        15  identical outside immutables
+TremorSeriesDeployer        11236    11236     300        15  identical outside immutables
+TremorMakerVault             3652     3652     400        20  identical outside immutables
+RealizedVarianceOracle       5562     5562      44         4  identical outside immutables
