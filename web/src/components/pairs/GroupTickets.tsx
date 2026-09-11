@@ -6,7 +6,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useTokenBalance } from "@/lib/chain";
 import { useGroupQuote } from "@/lib/portfolio-chain";
 import { isPortfolioDeployed, takerSpender } from "@/lib/contracts";
-import { fmtDateTime, fmtUnits, fmtUsdc, RECEIPT_DECIMALS, tryParseDecimal, WAD } from "@/lib/format";
+import { fmtDateTime, fmtPriceUsdc, fmtUnits, fmtUsdc, RECEIPT_DECIMALS, tryParseDecimal, WAD } from "@/lib/format";
 import { useDebounced, useNow } from "@/lib/hooks";
 import {
   SIDE_LABEL,
@@ -160,9 +160,9 @@ export function BuyGroupTicket({ g, side }: { g: GroupState; side: Side }) {
       ) : null}
       <DarkItems
         items={[
-          { label: "Writer's ask / unit", value: `${fmtUsdc(askFor(g, side))} USDC` },
+          { label: "Writer's ask / unit", value: `$${fmtPriceUsdc(askFor(g, side))} USDC` },
           { label: "Premium (on-chain quote)", value: premium !== undefined ? `${fmtUsdc(premium)} USDC` : quote.isFetching ? "…" : "—" },
-          { label: "Max payout / unit", value: `${fmtUsdc(g.params.capPayoutPerUnit)} USDC` },
+          { label: "Max payout / unit", value: `$${fmtPriceUsdc(g.params.capPayoutPerUnit)} USDC` },
           { label: "Sale closes", value: fmtDateTime(g.params.saleEnd) },
         ]}
       />
@@ -251,10 +251,10 @@ export function ExitGroupTicket({ g, side }: { g: GroupState; side: Side }) {
         bottom={{
           label: (
             <>
-              Writer&apos;s bid <b>{fmtUsdc(bidFor(g, side))}</b> USDC / unit
+              Writer&apos;s bid <b>${fmtPriceUsdc(bidFor(g, side))}</b> USDC / unit
             </>
           ),
-          value: proceeds !== undefined ? fmtUsdc(proceeds) : quote.isFetching ? "…" : "0.00",
+          value: proceeds !== undefined ? fmtPriceUsdc(proceeds) : quote.isFetching ? "…" : "0.00",
           unit: "USDC",
           unitIcon: "$",
           dim: proceeds === undefined,
@@ -382,17 +382,17 @@ export function RedeemGroupTicket({ g, side }: { g: GroupState; side: Side }) {
         bottom={{
           label: (
             <>
-              Fixed payout <b>{g.finalized ? fmtUsdc(ppuFor(g, side)) : "—"}</b> USDC / unit
+              Fixed payout <b>{g.finalized ? `$${fmtPriceUsdc(ppuFor(g, side))}` : "—"}</b> USDC / unit
             </>
           ),
           value: worthless
             ? "0.00"
             : proceeds !== undefined
-              ? fmtUsdc(proceeds)
+              ? fmtPriceUsdc(proceeds)
               : quote.isFetching
                 ? "…"
                 : estimate !== undefined
-                  ? fmtUsdc(estimate)
+                  ? fmtPriceUsdc(estimate)
                   : "0.00",
           unit: "USDC",
           unitIcon: "$",
@@ -402,8 +402,8 @@ export function RedeemGroupTicket({ g, side }: { g: GroupState; side: Side }) {
       <DarkItems
         items={[
           { label: "Final variance", value: g.finalized ? g.finalVariance.toString() : "not yet fixed" },
-          { label: `${SIDE_LABEL[side]} payout / unit`, value: g.finalized ? `${fmtUsdc(ppuFor(g, side))} USDC` : "—" },
-          { label: "Proceeds (on-chain quote)", value: worthless ? "0 — burn" : proceeds !== undefined ? `${fmtUsdc(proceeds)} USDC` : "—" },
+          { label: `${SIDE_LABEL[side]} payout / unit`, value: g.finalized ? `$${fmtPriceUsdc(ppuFor(g, side))} USDC` : "—" },
+          { label: "Proceeds (on-chain quote)", value: worthless ? "0 — burn" : proceeds !== undefined ? `$${fmtPriceUsdc(proceeds)} USDC` : "—" },
         ]}
       />
       {!worthless ? <SlippageRow value={slippage} onChange={setSlippage} /> : null}

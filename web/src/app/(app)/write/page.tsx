@@ -3,6 +3,7 @@ import { WriteWizard } from "@/components/write/WriteWizard";
 import { ClientOnly } from "@/components/ui/ClientOnly";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PageHeader } from "@/components/ui/SectionRow";
+import { TestTokenBanner } from "@/components/ui/TestTokenNotice";
 
 export const metadata: Metadata = { title: "Write" };
 
@@ -14,6 +15,7 @@ export default function WritePage() {
         title="Open a variance market"
         body="Window, size, price — the other ten parameters derive from them. Your collateral goes into a vault only you own, and the part backing units you have sold cannot come back out until those receipts are burned."
       />
+      <TestTokenBanner />
       <ClientOnly
         fallback={
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(360px,1fr)]">

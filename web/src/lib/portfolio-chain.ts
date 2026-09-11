@@ -174,9 +174,19 @@ export async function readGroupCheckpointProgress(id: bigint): Promise<{ stored:
   return { stored: Number(stored), available: Number(available), total: Number(total) };
 }
 
+export async function readGroupRealized(id: bigint): Promise<{ variance: bigint; elapsed: number; processedThrough: number }> {
+  const [variance, elapsed, processedThrough] = await publicClient.readContract({
+    address: ADDR.portfolioAccumulator,
+    abi: accumulatorAbi,
+    functionName: "realizedSoFar",
+    args: [id],
+  });
+  return { variance, elapsed: Number(elapsed), processedThrough: Number(processedThrough) };
+}
+
 // ---------------------------------------------------------------- hooks
 
-const quiet = { retry: 0, refetchOnWindowFocus: false } as const;
+const livePolling = { retry: 1, refetchOnWindowFocus: true } as const;
 const k = (v: bigint | undefined) => (v === undefined ? "" : v.toString());
 
 export function useGroupList(enabled = true) {
@@ -184,8 +194,8 @@ export function useGroupList(enabled = true) {
     queryKey: ["chain", "groups"],
     queryFn: readAllGroupStates,
     enabled: isPortfolioDeployed && enabled,
-    refetchInterval: 10_000,
-    ...quiet,
+    refetchInterval: 3_000,
+    ...livePolling,
   });
 }
 
@@ -194,8 +204,8 @@ export function useGroupState(id: bigint | undefined) {
     queryKey: ["chain", "group", k(id)],
     queryFn: () => readGroupState(id as bigint),
     enabled: isPortfolioDeployed && id !== undefined,
-    refetchInterval: 8_000,
-    ...quiet,
+    refetchInterval: 3_000,
+    ...livePolling,
   });
 }
 
@@ -211,8 +221,8 @@ export function useGroupQuote(
     queryKey: ["chain", "groupQuote", k(g?.id), kind, side, isExactIn, amount?.toString() ?? ""],
     queryFn: () => quoteGroup(g as GroupState, kind, side, isExactIn, amount as bigint),
     enabled: enabled && isPortfolioDeployed && g !== undefined && amount !== null && amount > 0n,
-    refetchInterval: 10_000,
-    ...quiet,
+    refetchInterval: 4_000,
+    ...livePolling,
   });
 }
 
@@ -221,8 +231,18 @@ export function useGroupCheckpointProgress(id: bigint | undefined) {
     queryKey: ["chain", "groupCheckpoints", k(id)],
     queryFn: () => readGroupCheckpointProgress(id as bigint),
     enabled: isPortfolioDeployed && id !== undefined,
-    refetchInterval: 8_000,
-    ...quiet,
+    refetchInterval: 3_000,
+    ...livePolling,
+  });
+}
+
+export function useGroupRealized(id: bigint | undefined) {
+  return useQuery({
+    queryKey: ["chain", "groupRealized", k(id)],
+    queryFn: () => readGroupRealized(id as bigint),
+    enabled: isPortfolioDeployed && id !== undefined,
+    refetchInterval: 3_000,
+    ...livePolling,
   });
 }
 
@@ -247,8 +267,8 @@ export function useVaultBalances(vault: Address | undefined) {
     queryKey: ["chain", "vaultBalances", vault ?? ""],
     queryFn: () => readVaultBalances(vault as Address),
     enabled: isPortfolioDeployed && !!vault && !/^0x0{40}$/i.test(vault),
-    refetchInterval: 8_000,
-    ...quiet,
+    refetchInterval: 3_000,
+    ...livePolling,
   });
 }
 
@@ -257,7 +277,7 @@ export function usePortfolioVault(writer: Address | undefined) {
     queryKey: ["chain", "portfolioVault", writer ?? ""],
     queryFn: () => readPortfolioVaultOf(writer as Address),
     enabled: isPortfolioDeployed && !!writer,
-    refetchInterval: 8_000,
-    ...quiet,
+    refetchInterval: 3_000,
+    ...livePolling,
   });
 }

@@ -246,4 +246,15 @@ describe("derivations", () => {
     const sorted = sortGroups([fin, open], params.start + 1);
     expect(sorted[0].id).toBe(1n);
   });
+
+  it("fmtPriceUsdc handles micro-cent payouts and standard prices with proper precision", async () => {
+    const { fmtPriceUsdc } = await import("./format");
+    expect(fmtPriceUsdc(0n)).toBe("0.00");
+    // Group 1 exact values on Base Sepolia:
+    expect(fmtPriceUsdc(427n)).toBe("0.000427");
+    expect(fmtPriceUsdc(999573n)).toBe("0.999573");
+    expect(fmtPriceUsdc(300_000n)).toBe("0.30");
+    expect(fmtPriceUsdc(280_000n)).toBe("0.28");
+    expect(fmtPriceUsdc(1_000_000n)).toBe("1.00");
+  });
 });

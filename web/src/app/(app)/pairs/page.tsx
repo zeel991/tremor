@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { GroupTable } from "@/components/pairs/GroupTable";
 import { PageHeader } from "@/components/ui/SectionRow";
+import { TestTokenBanner } from "@/components/ui/TestTokenNotice";
 import { LinkButton } from "@/components/ui/Button";
 
 export const metadata: Metadata = { title: "Paired markets" };
@@ -18,6 +19,7 @@ export default function PairsPage() {
           </LinkButton>
         }
       />
+      <TestTokenBanner />
       <GroupTable />
     </div>
   );

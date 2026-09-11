@@ -3,6 +3,7 @@ import { PortfolioView } from "@/components/portfolio/PortfolioView";
 import { ClientOnly } from "@/components/ui/ClientOnly";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PageHeader } from "@/components/ui/SectionRow";
+import { TestTokenBanner } from "@/components/ui/TestTokenNotice";
 
 export const metadata: Metadata = { title: "Portfolio" };
 
@@ -10,6 +11,7 @@ export default function PortfolioPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader label="Portfolio" title="Receipts held and series written" body="Live positions are valued at the executable exit bid; finalized ones at the fixed payout per unit. The two are never blended." />
+      <TestTokenBanner />
       <ClientOnly
         fallback={
           <div className="grid gap-4 sm:grid-cols-3">

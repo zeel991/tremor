@@ -292,6 +292,38 @@ export const FinalizationSchema = z.object({
 });
 export type Finalization = z.infer<typeof FinalizationSchema>;
 
+export const PortfolioEventSchema = z.object({
+  id: zInt.default(0),
+  groupId: zInt,
+  eventType: z.string(),
+  actor: zAddr.nullable().optional(),
+  side: z.string().nullable().optional(),
+  units: zUnits.default(0n),
+  amount: zUsdc.default(0n),
+  newOutstanding: zUnits.nullable().optional(),
+  newReserve: zUsdc.nullable().optional(),
+  newBuffer: zUsdc.nullable().optional(),
+  blockNumber: zInt.default(0),
+  txHash: zHex,
+  logIndex: zInt.default(0),
+  timestamp: zTs.default(0),
+});
+export type PortfolioEvent = z.infer<typeof PortfolioEventSchema>;
+
+export const PortfolioCheckpointSchema = z.object({
+  txHash: zHex,
+  logIndex: zInt.default(0),
+  block: zInt.default(0),
+  timestamp: zTs.default(0),
+  groupId: zInt,
+  fromSample: zInt.default(0),
+  toSample: zInt.default(0),
+  processedThrough: zTs.default(0),
+  lastRoundId: z.union([z.string(), z.number(), z.bigint()]).transform(String).default("0"),
+  sumSquaredReturns: zWad.default(0n),
+});
+export type PortfolioCheckpoint = z.infer<typeof PortfolioCheckpointSchema>;
+
 /**
  * One point on the market chart.
  *
@@ -606,10 +638,15 @@ export const fetchFeedHistory = (from: number, to: number, interval: number) =>
   apiGet("/feed/history", FeedHistorySchema, { from, to, interval });
 export const fetchLvr = (poolValueUsd: number, horizonDays: number, window: TrailingWindow = "7d") =>
   apiGet("/lvr", LvrSchema, { pool_value_usd: poolValueUsd, horizon_days: horizonDays, window });
+export const fetchPairsEvents = (id: bigint, limit = 200) =>
+  apiGet(`/pairs/${id}/events`, z.array(PortfolioEventSchema), { limit });
+export const fetchPairsCheckpoints = (id: bigint) =>
+  apiGet(`/pairs/${id}/checkpoints`, z.array(PortfolioCheckpointSchema));
 
 // ---------------------------------------------------------------- hooks
 
-const quiet = { retry: 0, refetchOnWindowFocus: false } as const;
+const livePolling = { retry: 1, refetchOnWindowFocus: true } as const;
+const quiet = { retry: 0, refetchOnWindowFocus: true } as const;
 
 export function useApiHealth() {
   return useQuery({ queryKey: ["api", "health"], queryFn: fetchHealth, refetchInterval: 10_000, staleTime: 5_000, ...quiet });
@@ -645,6 +682,24 @@ export function useFills(id: bigint | undefined) {
     ...quiet,
   });
 }
+export function usePairsEvents(id: bigint | undefined, limit = 200) {
+  return useQuery({
+    queryKey: ["api", "pairs", id?.toString() ?? "", "events", limit],
+    queryFn: () => fetchPairsEvents(id as bigint, limit),
+    enabled: id !== undefined,
+    refetchInterval: 6_000,
+    ...quiet,
+  });
+}
+export function usePairsCheckpoints(id: bigint | undefined) {
+  return useQuery({
+    queryKey: ["api", "pairs", id?.toString() ?? "", "checkpoints"],
+    queryFn: () => fetchPairsCheckpoints(id as bigint),
+    enabled: id !== undefined,
+    refetchInterval: 8_000,
+    ...quiet,
+  });
+}
 /** The market chart: realized vol, the market's own quote vol, and the executable bid/ask band. */
 export function useMarket(id: bigint | undefined, points = 200) {
   return useQuery({
@@ -671,8 +726,8 @@ export function usePortfolio(address: string | undefined) {
     queryKey: ["api", "portfolio", address ?? ""],
     queryFn: () => fetchPortfolio(address as string),
     enabled: !!address,
-    refetchInterval: 10_000,
-    ...quiet,
+    refetchInterval: 3_000,
+    ...livePolling,
   });
 }
 export function useVariance(id: bigint | undefined) {

@@ -75,6 +75,8 @@ function placeholders(): Record<string, string> {
     "programs",
     "lens",
     "oracle",
+    "portfolioMarket",
+    "portfolioAccumulator",
     "writer",
     "buyer",
     "deploymentBlock",

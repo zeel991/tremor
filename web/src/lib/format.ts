@@ -120,6 +120,26 @@ export function formatFixed(value: bigint, decimals: number, opts: FmtOpts = {})
 }
 
 export const fmtUsdc = (v: bigint, maxFrac = 2): string => formatFixed(v, USDC_DECIMALS, { maxFrac });
+
+/**
+ * Format a USDC price or payout per unit with adaptive precision:
+ * - If 0: "0.00"
+ * - If micro-cents (< 0.01 USDC, e.g. $0.000427 USDC): uses up to 6 decimals so values don't round to 0.
+ * - If sub-cent fractional amount: uses up to 6 decimals (min 2).
+ * - Otherwise: standard 2 decimals.
+ */
+export function fmtPriceUsdc(v: bigint, maxFrac = 6): string {
+  if (v === 0n) return "0.00";
+  const abs = v < 0n ? -v : v;
+  if (abs < 10_000n) {
+    return formatFixed(v, USDC_DECIMALS, { maxFrac: Math.max(maxFrac, 6), minFrac: 2 });
+  }
+  if (abs % 10_000n !== 0n) {
+    return formatFixed(v, USDC_DECIMALS, { maxFrac: Math.max(maxFrac, 4), minFrac: 2 });
+  }
+  return formatFixed(v, USDC_DECIMALS, { maxFrac: 2, minFrac: 2 });
+}
+
 export const fmtUnits = (v: bigint, maxFrac = 2): string => formatFixed(v, RECEIPT_DECIMALS, { maxFrac });
 export const fmtWad = (v: bigint, maxFrac = 4): string => formatFixed(v, 18, { maxFrac });
 

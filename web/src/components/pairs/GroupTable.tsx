@@ -5,7 +5,7 @@ import { useMemo } from "react";
 import { useGroupList } from "@/lib/portfolio-chain";
 import { useNow } from "@/lib/hooks";
 import { deploymentError, isDeployed, isPortfolioDeployed } from "@/lib/contracts";
-import { fmtDate, fmtRelative, fmtUnits, fmtUsdc } from "@/lib/format";
+import { fmtDate, fmtPriceUsdc, fmtRelative, fmtUnits, fmtUsdc } from "@/lib/format";
 import {
   GROUP_STATUS_LABEL,
   groupStatus,
@@ -47,7 +47,7 @@ export function GroupTable({ limit }: { limit?: number }) {
     return l;
   }, [list.data, now, limit]);
 
-  const cols = 8;
+  const cols = 9;
 
   return (
     <div className="card card-flush">
@@ -58,10 +58,11 @@ export function GroupTable({ limit }: { limit?: number }) {
               <th>Group</th>
               <th>Status</th>
               <th>Expiry</th>
+              <th className="num">HIGH (Bid / Ask / Payout)</th>
+              <th className="num">CALM (Bid / Ask / Payout)</th>
               <th className="num">HIGH outstanding</th>
               <th className="num">CALM outstanding</th>
               <th className="num">Reserve / if separate</th>
-              <th className="num">Exit buffer</th>
               <th className="num"></th>
             </tr>
           </thead>
@@ -117,6 +118,20 @@ export function GroupTable({ limit }: { limit?: number }) {
                         <span className="block text-[11px] text-ink-3">{now ? fmtRelative(g.params.expiry, now) : ""}</span>
                       </td>
                       <td className="num">
+                        {g.finalized ? (
+                          <span className="font-medium text-lime font-mono">${fmtPriceUsdc(g.highPpu)}</span>
+                        ) : (
+                          <span className="font-mono">${fmtPriceUsdc(g.params.bidHigh)} / ${fmtPriceUsdc(g.params.askHigh)}</span>
+                        )}
+                      </td>
+                      <td className="num">
+                        {g.finalized ? (
+                          <span className="font-medium text-ink font-mono">${fmtPriceUsdc(g.calmPpu)}</span>
+                        ) : (
+                          <span className="font-mono text-ink">${fmtPriceUsdc(g.params.bidCalm)} / ${fmtPriceUsdc(g.params.askCalm)}</span>
+                        )}
+                      </td>
+                      <td className="num">
                         {fmtUnits(g.highOutstanding, 0)}
                         <span className="text-ink-3"> / {fmtUnits(g.params.maxUnitsPerSide, 0)}</span>
                       </td>
@@ -127,7 +142,6 @@ export function GroupTable({ limit }: { limit?: number }) {
                       <td className="num">
                         <ReserveCell g={g} />
                       </td>
-                      <td className="num">{fmtUsdc(g.exitBuffer, 0)}</td>
                       <td className="num">
                         <Link href={`/pairs/${g.id.toString()}`} className="btn btn-tertiary btn-sm">
                           Open

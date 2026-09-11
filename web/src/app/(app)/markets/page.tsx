@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { SeriesTable } from "@/components/series/SeriesTable";
 import { PageHeader } from "@/components/ui/SectionRow";
+import { TestTokenBanner } from "@/components/ui/TestTokenNotice";
 import { LinkButton } from "@/components/ui/Button";
 
 export const metadata: Metadata = { title: "Markets" };
@@ -18,6 +19,7 @@ export default function MarketsPage() {
           </LinkButton>
         }
       />
+      <TestTokenBanner />
       <SeriesTable />
     </div>
   );

@@ -350,7 +350,8 @@ export async function readFeedLatest(): Promise<{ price: number; updatedAt: numb
 
 // ---------------------------------------------------------------- hooks
 
-const quiet = { retry: 0, refetchOnWindowFocus: false } as const;
+const livePolling = { retry: 1, refetchOnWindowFocus: true } as const;
+const quiet = { retry: 0, refetchOnWindowFocus: true } as const;
 const k = (v: bigint | undefined) => (v === undefined ? "" : v.toString());
 
 export function useRpcStatus() {
@@ -360,9 +361,9 @@ export function useRpcStatus() {
       const b = await publicClient.getBlock({ blockTag: "latest" });
       return { number: b.number, timestamp: Number(b.timestamp) };
     },
-    refetchInterval: 12_000,
-    staleTime: 6_000,
-    ...quiet,
+    refetchInterval: 6_000,
+    staleTime: 3_000,
+    ...livePolling,
   });
 }
 
@@ -379,8 +380,8 @@ export function useChainSeries(enabled = true) {
     queryKey: ["chain", "series"],
     queryFn: readAllStates,
     enabled: isDeployed && enabled,
-    refetchInterval: 10_000,
-    ...quiet,
+    refetchInterval: 3_000,
+    ...livePolling,
   });
 }
 
@@ -389,8 +390,8 @@ export function useChainSeriesState(id: bigint | undefined) {
     queryKey: ["chain", "series", k(id)],
     queryFn: () => readState(id as bigint),
     enabled: isDeployed && id !== undefined,
-    refetchInterval: 8_000,
-    ...quiet,
+    refetchInterval: 3_000,
+    ...livePolling,
   });
 }
 
@@ -399,8 +400,8 @@ export function useQuoteIssueExactIn(id: bigint | undefined, quoteIn: bigint | n
     queryKey: ["chain", "quoteIssueIn", k(id), quoteIn?.toString() ?? ""],
     queryFn: () => quoteIssueExactIn(id as bigint, quoteIn as bigint),
     enabled: isDeployed && id !== undefined && quoteIn !== null && quoteIn > 0n,
-    refetchInterval: 10_000,
-    ...quiet,
+    refetchInterval: 4_000,
+    ...livePolling,
   });
 }
 
@@ -409,8 +410,8 @@ export function useQuoteIssueExactOut(id: bigint | undefined, units: bigint | nu
     queryKey: ["chain", "quoteIssueOut", k(id), units?.toString() ?? ""],
     queryFn: () => quoteIssueExactOut(id as bigint, units as bigint),
     enabled: isDeployed && id !== undefined && units !== null && units > 0n,
-    refetchInterval: 10_000,
-    ...quiet,
+    refetchInterval: 4_000,
+    ...livePolling,
   });
 }
 
@@ -419,8 +420,8 @@ export function useQuoteExit(id: bigint | undefined, units: bigint | null, enabl
     queryKey: ["chain", "quoteExit", k(id), units?.toString() ?? ""],
     queryFn: () => quoteExitExactIn(id as bigint, units as bigint),
     enabled: enabled && isDeployed && id !== undefined && units !== null && units > 0n,
-    refetchInterval: 10_000,
-    ...quiet,
+    refetchInterval: 4_000,
+    ...livePolling,
   });
 }
 
@@ -429,8 +430,8 @@ export function useQuoteSettle(id: bigint | undefined, units: bigint | null, ena
     queryKey: ["chain", "quoteSettle", k(id), units?.toString() ?? ""],
     queryFn: () => quoteSettleExactIn(id as bigint, units as bigint),
     enabled: enabled && isDeployed && id !== undefined && units !== null && units > 0n,
-    refetchInterval: 15_000,
-    ...quiet,
+    refetchInterval: 5_000,
+    ...livePolling,
   });
 }
 
@@ -449,8 +450,8 @@ export function useWriterVault(writer: Address | undefined) {
     queryKey: ["chain", "writerVault", writer ?? ""],
     queryFn: () => readWriterVault(writer as Address),
     enabled: isDeployed && !!writer,
-    refetchInterval: 8_000,
-    ...quiet,
+    refetchInterval: 3_000,
+    ...livePolling,
   });
 }
 
@@ -459,8 +460,8 @@ export function useCheckpointProgress(id: bigint | undefined) {
     queryKey: ["chain", "checkpoints", k(id)],
     queryFn: () => readCheckpointProgress(id as bigint),
     enabled: isDeployed && id !== undefined,
-    refetchInterval: 8_000,
-    ...quiet,
+    refetchInterval: 3_000,
+    ...livePolling,
   });
 }
 
@@ -479,8 +480,8 @@ export function useTokenBalance(token: Address | undefined, owner: Address | und
     queryKey: ["chain", "balance", token ?? "", owner ?? ""],
     queryFn: () => erc20BalanceOf(token as Address, owner as Address),
     enabled: !!token && !!owner && !/^0x0{40}$/.test(token),
-    refetchInterval: 8_000,
-    ...quiet,
+    refetchInterval: 3_000,
+    ...livePolling,
   });
 }
 
@@ -489,8 +490,8 @@ export function useAllowance(token: Address | undefined, owner: Address | undefi
     queryKey: ["chain", "allowance", token ?? "", owner ?? "", spender ?? ""],
     queryFn: () => erc20Allowance(token as Address, owner as Address, spender as Address),
     enabled: !!token && !!owner && !!spender && !/^0x0{40}$/.test(token),
-    refetchInterval: 8_000,
-    ...quiet,
+    refetchInterval: 3_000,
+    ...livePolling,
   });
 }
 
@@ -505,8 +506,8 @@ export function useReceiptBalances(owner: Address | undefined, list: SeriesState
       return out;
     },
     enabled: !!owner && receipts.length > 0,
-    refetchInterval: 8_000,
-    ...quiet,
+    refetchInterval: 3_000,
+    ...livePolling,
   });
 }
 
@@ -515,8 +516,8 @@ export function useFeedLatest() {
     queryKey: ["chain", "feed", ADDR.feed],
     queryFn: readFeedLatest,
     enabled: !/^0x0{40}$/.test(ADDR.feed),
-    refetchInterval: 15_000,
-    ...quiet,
+    refetchInterval: 8_000,
+    ...livePolling,
   });
 }
 

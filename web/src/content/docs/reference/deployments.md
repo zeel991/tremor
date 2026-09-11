@@ -1,15 +1,18 @@
 Addresses come from `contracts/deployments/<chainId>.json`, written by `Deploy.s.sol` and copied to `web/src/config/deployment.json` by `script/sync-deployment.sh <chainId>`.
 
 ```json
-{ "schemaVersion": 2, "chainId": 31337,
+{ "schemaVersion": 3, "chainId": 31337,
   "aqua": "0x…", "weth": "0x…", "usdc": "0x…", "feed": "0x…",
   "router": "0x…", "routerSourceCommit": "…", "routerBytecodeHash": "0x…",
   "seriesFactory": "0x…", "marketEngine": "0x…", "accumulator": "0x…",
   "seriesDeployer": "0x…", "programs": "0x…", "lens": "0x…", "oracle": "0x…",
+  "portfolioMarket": "0x…", "portfolioAccumulator": "0x…",
   "deploymentBlock": 51021223, "writer": "0x…", "buyer": "0x…" }
 ```
 
-The manifest is **versioned**. The backend rejects `schemaVersion` other than 2 at startup rather than mis-decoding a v1 manifest, and it also refuses zero addresses. `routerSourceCommit` and `routerBytecodeHash` pin exactly which official `AquaSwapVMRouter` source this deployment runs — see [Running on the official router](/docs/programs/official-router).
+The manifest is **versioned**. Schema 3 adds `portfolioMarket` and `portfolioAccumulator` for the v3 HIGH/CALM risk groups. The backend rejects any `schemaVersion` it does not understand at startup rather than mis-decoding an older manifest, and it also refuses zero addresses. `routerSourceCommit` and `routerBytecodeHash` pin exactly which official `AquaSwapVMRouter` source this deployment runs — see [Running on the official router](/docs/programs/official-router).
+
+On the public Base Sepolia deployment `routerSourceCommit` reads `unknown`: the vendored `contracts/lib/swap-vm` carries no `.git` directory, so the upstream commit cannot be recovered. `routerBytecodeHash` is still pinned and verifiable, and the deployed router's runtime bytecode reproduces the vendored official source byte-for-byte outside its immutable slots.
 
 ## This build — {{chainName}} ({{chainId}}), {{deployed}}
 
@@ -24,7 +27,9 @@ The manifest is **versioned**. The backend rejects `schemaVersion` other than 2 
 | TremorPrograms | `{{programs}}` |
 | TremorLens | `{{lens}}` |
 | RealizedVarianceOracle | `{{oracle}}` |
-| USDC | `{{usdc}}` |
+| TremorPortfolioMarket | `{{portfolioMarket}}` |
+| Portfolio VarianceAccumulator | `{{portfolioAccumulator}}` |
+| Quote token | `{{usdc}}` |
 | Chainlink ETH/USD | `{{feed}}` |
 | WETH | `{{weth}}` |
 | Demo writer | `{{writer}}` |
@@ -41,8 +46,14 @@ Env for this build: `NEXT_PUBLIC_RPC_URL={{rpcUrl}}`, `NEXT_PUBLIC_API_URL={{api
 | Chain | Id | Aqua | USDC | Chainlink ETH/USD |
 |---|---|---|---|---|
 | Tremor Fork (anvil fork of Base mainnet) | `31337` | canonical `0x1111113ccf1426a8e30e2bff5e005d929bf6a90a` | real `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` (6 dec) | real `0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70` (8 dec) |
-| Base Sepolia | `84532` | our own Aqua deployment | `MockUSDC` | `0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb1` |
+| Base Sepolia | `84532` | our own Aqua deployment | **`MockUSDC` — test token, see below** | `0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb1` |
 | Base | `8453` | canonical `0x1111113ccf1426a8e30e2bff5e005d929bf6a90a` | real USDC | real ETH/USD |
+
+> **The Base Sepolia quote token is not USDC.** It is Tremor's own **MockUSDC** at
+> `0x13a058bE25Da579e0858d689F5982eDaCE8356B7` — freely mintable by anyone and worth nothing. Its ERC-20
+> `symbol()` returns the string `"USDC"`, so wallets and explorers will display it as USDC. It has no
+> relationship to Circle's USDC. Every amount shown in the app on chain 84532 is denominated in this test
+> token.
 
 Note the router. Tremor deploys the **official `AquaSwapVMRouter` source, unmodified**, rather than using the router deployed at the canonical SwapVM address, because that address exposes a different SwapVM revision's swap ABI. The compatibility gate documents the observation and the fallback.
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { fmtUsdc } from "@/lib/format";
+import { fmtPriceUsdc, fmtUsdc } from "@/lib/format";
 import { useNow } from "@/lib/hooks";
 import {
   GROUP_STATUS_LABEL,
@@ -14,6 +14,7 @@ import {
   groupNeedsWorthlessBurn,
   groupStatus,
   groupSymbol,
+  ppuFor,
   type GroupState,
   type Side,
 } from "@/lib/portfolio";
@@ -81,7 +82,10 @@ export function GroupTradeRail({ g }: { g: GroupState }) {
         label="Side"
         value={side}
         onChange={setSide}
-        options={(["high", "calm"] as Side[]).map((v) => ({ value: v, label: SIDE_LABEL[v] }))}
+        options={(["high", "calm"] as Side[]).map((v) => ({
+          value: v,
+          label: `${SIDE_LABEL[v]} ($${fmtPriceUsdc(g.finalized ? ppuFor(g, v) : askFor(g, v))})`,
+        }))}
       />
       {kinds.length > 1 ? (
         <Segmented
@@ -93,18 +97,34 @@ export function GroupTradeRail({ g }: { g: GroupState }) {
           options={kinds.map((v) => ({ value: v, label: KIND_LABEL[v] }))}
         />
       ) : null}
-      <dl className="trade-quote-strip">
-        <div>
-          <dt>{SIDE_LABEL[side]} bid / unit</dt>
-          <dd>{fmtUsdc(bidFor(g, side))} USDC</dd>
+      {g.finalized ? (
+        <div className="border border-lime/30 bg-lime/10 p-3">
+          <div className="text-[11px] uppercase tracking-wider text-lime font-medium">Final Settlement Price</div>
+          <div className="mt-1 flex items-baseline justify-between">
+            <span className="text-[20px] font-mono font-medium text-white">
+              ${fmtPriceUsdc(ppuFor(g, side))} <small className="text-[12px] text-white/60">USDC / unit</small>
+            </span>
+            <span className="text-[12px] font-mono text-lime">
+              {side === "high" ? `${(Number(g.xWad) / 1e16).toFixed(2)}% of cap` : `${(100 - Number(g.xWad) / 1e16).toFixed(2)}% of cap`}
+            </span>
+          </div>
         </div>
-        <div>
-          <dt>{SIDE_LABEL[side]} ask / unit</dt>
-          <dd>{fmtUsdc(askFor(g, side))} USDC</dd>
-        </div>
-      </dl>
+      ) : (
+        <dl className="trade-quote-strip">
+          <div>
+            <dt>{SIDE_LABEL[side]} bid / unit</dt>
+            <dd>${fmtPriceUsdc(bidFor(g, side))} USDC</dd>
+          </div>
+          <div>
+            <dt>{SIDE_LABEL[side]} ask / unit</dt>
+            <dd>${fmtPriceUsdc(askFor(g, side))} USDC</dd>
+          </div>
+        </dl>
+      )}
       <p className="m-0 text-[12px] leading-4 text-white/45">
-        Fixed bid/ask quotes set by the writer — not a fair-value volatility model.
+        {g.finalized
+          ? "Market finalized: payouts are fixed by on-chain realized variance. Redeem or burn receipts."
+          : "Fixed bid/ask quotes set by the writer — not a fair-value volatility model."}
       </p>
       {kind === "buy" ? (
         <BuyGroupTicket g={g} side={side} />

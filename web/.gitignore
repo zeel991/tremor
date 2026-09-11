@@ -40,5 +40,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# keep the example env
+# keep the example envs — placeholders only, never real values
 !.env.example
+!.env.sepolia.example
+!.env.production.example

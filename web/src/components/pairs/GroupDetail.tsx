@@ -7,7 +7,7 @@ import { useGroupState } from "@/lib/portfolio-chain";
 import { useRpcOnline } from "@/lib/chain";
 import { useNow } from "@/lib/hooks";
 import { deploymentError, isDeployed, isPortfolioDeployed } from "@/lib/contracts";
-import { fmtDateTime, fmtDuration, fmtRelative, fmtUnits, fmtUsdc, fmtVolPct, fmtWad } from "@/lib/format";
+import { fmtDateTime, fmtDuration, fmtPriceUsdc, fmtRelative, fmtUnits, fmtUsdc, fmtVolPct, fmtWad } from "@/lib/format";
 import {
   GROUP_STATUS_LABEL,
   groupStatus,
@@ -19,13 +19,16 @@ import { Card } from "@/components/ui/Card";
 import { Tag } from "@/components/ui/Tag";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Address } from "@/components/ui/Address";
+import { usePairsEvents, useApiOnline } from "@/lib/api";
+import { Address, TxHash } from "@/components/ui/Address";
 import { LinkButton } from "@/components/ui/Button";
+import { SkeletonRows } from "@/components/ui/Skeleton";
 import { PortfolioSummaryCard } from "./PortfolioSummaryCard";
 import { ExitBufferCard } from "./ExitBufferCard";
 import { GroupTradeRail } from "./GroupTradeRail";
+import { LivePairPricingCard } from "./LivePairPricingCard";
 
-const PairPayoffChart = dynamic(() => import("./PairPayoffChart").then((m) => m.PairPayoffChart), { ssr: false });
+const PairMarketChart = dynamic(() => import("./PairMarketChart").then((m) => m.PairMarketChart), { ssr: false });
 
 function Header({ g, now }: { g: GroupState; now: number }) {
   const p = g.params;
@@ -64,18 +67,26 @@ function Header({ g, now }: { g: GroupState; now: number }) {
 
       <dl className="market-tape">
         <div className="market-tape-primary">
-          <dt>HIGH bid / ask per unit</dt>
+          <dt>HIGH {g.finalized ? "final payout" : "bid / ask"} per unit</dt>
           <dd>
-            {fmtUsdc(p.bidHigh)} / {fmtUsdc(p.askHigh)} <small>USDC</small>
+            {g.finalized ? (
+              <>{fmtPriceUsdc(g.highPpu)} <small>USDC</small></>
+            ) : (
+              <>{fmtPriceUsdc(p.bidHigh)} / {fmtPriceUsdc(p.askHigh)} <small>USDC</small></>
+            )}
           </dd>
-          <span>fixed by the writer — not a fair-value volatility model</span>
+          <span>{g.finalized ? "exact on-chain payout at finalization" : "fixed by the writer — not a fair-value volatility model"}</span>
         </div>
         <div>
-          <dt>CALM bid / ask per unit</dt>
+          <dt>CALM {g.finalized ? "final payout" : "bid / ask"} per unit</dt>
           <dd>
-            {fmtUsdc(p.bidCalm)} / {fmtUsdc(p.askCalm)}
+            {g.finalized ? (
+              <>{fmtPriceUsdc(g.calmPpu)} <small>USDC</small></>
+            ) : (
+              <>{fmtPriceUsdc(p.bidCalm)} / {fmtPriceUsdc(p.askCalm)} <small>USDC</small></>
+            )}
           </dd>
-          <span>fixed by the writer</span>
+          <span>{g.finalized ? "exact on-chain payout at finalization" : "fixed by the writer"}</span>
         </div>
         <div>
           <dt>{g.finalized ? "Final realized vol" : "Volatility cap"}</dt>
@@ -186,37 +197,120 @@ export function GroupDetail({ idStr }: { idStr: string }) {
     <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(360px,1fr)] xl:items-start">
       <div className="flex min-w-0 flex-col gap-6">
         <Header g={g} now={now} />
-
-        <Card
-          title="HIGH vs CALM"
-          meta="Two complementary capped claims that always sum to the cap payout"
-        >
-          <p className="mt-0 text-[13px] leading-5 text-ink-2">
-            At finalization, x = min(final variance / cap variance, 1). A HIGH unit pays{" "}
-            <b className="tnum">S·x</b> and a CALM unit pays <b className="tnum">S·(1−x)</b>, with S ={" "}
-            <b className="tnum">{fmtUsdc(g.params.capPayoutPerUnit)} USDC</b>. Because the two payouts sum to S
-            at every outcome, one reserve of max(HIGH, CALM)·S backs both sides — never the sum of the caps.
-          </p>
-          <PairPayoffChart g={g} />
-          <p className="mb-0 mt-3 text-[12px] text-ink-3">
-            {sideSymbol(g, "high")} and {sideSymbol(g, "calm")} share one observation window (
-            {fmtDateTime(g.params.start)} → {fmtDateTime(g.params.expiry)}, sampled every{" "}
-            {fmtDuration(g.params.sampleInterval)}) and one {fmtVolPct(g.params.capVariance)}% volatility cap.
-          </p>
-        </Card>
+        <LivePairPricingCard g={g} />
+        <PairMarketChart g={g} />
 
         <PortfolioSummaryCard g={g} />
         <ExitBufferCard g={g} />
-
-        <Card title="Fills and history" meta="Not yet indexed">
-          <p className="m-0 text-[13px] text-ink-2">
-            Paired markets are read straight from the chain for now — the indexer does not cover them yet, so
-            there is no fill feed or price history here. Everything above is live contract state.
-          </p>
-        </Card>
+        <GroupEventsCard g={g} />
       </div>
 
       <GroupTradeRail g={g} />
     </div>
+  );
+}
+
+function GroupEventsCard({ g }: { g: GroupState }) {
+  const events = usePairsEvents(g.id);
+  const online = useApiOnline();
+  const list = events.data ?? [];
+  const offline = online === false || events.isError;
+
+  return (
+    <Card
+      title="Fills and history"
+      meta={list.length > 0 ? `${list.length} events · indexed by backend` : "indexed by backend"}
+      flush
+    >
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Event</th>
+              <th>Side</th>
+              <th>Time</th>
+              <th className="num">Units</th>
+              <th className="num">Amount (USDC)</th>
+              <th>Actor</th>
+              <th className="num">Tx</th>
+            </tr>
+          </thead>
+          {events.isPending && !offline ? (
+            <SkeletonRows rows={3} cols={7} />
+          ) : (
+            <tbody>
+              {offline || list.length === 0 ? (
+                <tr>
+                  <td colSpan={7} style={{ height: "auto" }}>
+                    <EmptyState>
+                      {offline
+                        ? "API offline — portfolio events are indexed by the backend."
+                        : "No portfolio events recorded yet."}
+                    </EmptyState>
+                  </td>
+                </tr>
+              ) : (
+                list.map((e) => {
+                  const label =
+                    e.eventType === "issued"
+                      ? "Buy"
+                      : e.eventType === "exited"
+                        ? "Exit"
+                        : e.eventType === "settled"
+                          ? "Redeem"
+                          : e.eventType === "finalized"
+                            ? "Finalize"
+                            : e.eventType === "buffer_funded"
+                              ? "Fund Buffer"
+                              : e.eventType === "buffer_withdrawn"
+                                ? "Withdraw Buffer"
+                                : e.eventType;
+                  return (
+                    <tr key={`${e.txHash}-${e.logIndex}`}>
+                      <td>
+                        <span
+                          className={`inline-flex items-center gap-1.5 text-[13px] font-medium ${
+                            e.eventType === "issued"
+                              ? "text-lime-dark"
+                              : e.eventType === "settled"
+                                ? "text-up"
+                                : "text-ink"
+                          }`}
+                        >
+                          <span className="sdot" />
+                          {label}
+                        </span>
+                      </td>
+                      <td>
+                        {e.side ? (
+                          <Tag tone={e.side === "high" ? "lime" : "muted"}>
+                            {e.side.toUpperCase()}
+                          </Tag>
+                        ) : (
+                          <span className="text-ink-3">—</span>
+                        )}
+                      </td>
+                      <td className="text-ink-2">{e.timestamp > 0 ? fmtDateTime(e.timestamp) : "—"}</td>
+                      <td className="num font-medium">
+                        {e.units > 0n ? fmtUnits(e.units, 2) : "—"}
+                      </td>
+                      <td className="num">
+                        {e.amount > 0n ? fmtUsdc(e.amount) : "—"}
+                      </td>
+                      <td>
+                        {e.actor ? <Address value={e.actor} /> : <span className="text-ink-3">—</span>}
+                      </td>
+                      <td className="num">
+                        <TxHash value={e.txHash} />
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          )}
+        </table>
+      </div>
+    </Card>
   );
 }

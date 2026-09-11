@@ -3,6 +3,7 @@ import { CreateGroupForm } from "@/components/pairs/CreateGroupForm";
 import { ClientOnly } from "@/components/ui/ClientOnly";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PageHeader } from "@/components/ui/SectionRow";
+import { TestTokenBanner } from "@/components/ui/TestTokenNotice";
 
 export const metadata: Metadata = { title: "Write a paired market" };
 
@@ -14,6 +15,7 @@ export default function NewPairPage() {
         title="Write a paired market"
         body="One window, one cap, two complementary claims. Your collateral goes into a vault only you own; the reserve behind sold receipts cannot come back out until those receipts are burned. The four quotes below are fixed bid/ask prices you set — not a fair-value volatility model."
       />
+      <TestTokenBanner />
       <ClientOnly
         fallback={
           <div className="card">
