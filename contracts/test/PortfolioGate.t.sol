@@ -7,6 +7,7 @@ import {SwapQuery, SwapRegisters} from "swap-vm/libs/VM.sol";
 import {TremorMakerVault} from "../src/TremorMakerVault.sol";
 import {VarianceReceipt} from "../src/tokens/VarianceReceipt.sol";
 import {PortfolioOrderBuilder as POB} from "../src/portfolio/PortfolioOrderBuilder.sol";
+import {PortfolioMath} from "../src/portfolio/PortfolioMath.sol";
 import {TremorPortfolioMarket} from "../src/portfolio/TremorPortfolioMarket.sol";
 import {PortfolioTestBase} from "./base/PortfolioTestBase.sol";
 
@@ -333,5 +334,122 @@ contract PortfolioGateTest is PortfolioTestBase {
         vm.prank(writer);
         market.withdrawExitBuffer(gid, 5e6);
         assertEq(vault.freeQuote(), 5e6 + 100e6);
+    }
+
+    /// @notice Fractional-unit rounding: verify nonzero remainder during division in reserve,
+    ///   issue, exit, final liabilities, and settlement proceeds.
+    function test_fractionalUnitRounding_withNonzeroRemainder() public {
+        openGroup(100e6);
+
+        // Prime numbers designed to guarantee non-zero remainders modulo 1e18
+        uint256 hUnits = 33_333_333_333_333_333_337; // ~33.333 units
+        uint256 cUnits = 17_777_777_777_777_777_779; // ~17.777 units
+
+        // 1. Check PortfolioMath.reserve division remainder: (m * S) % 1e18 != 0
+        uint256 m = hUnits > cUnits ? hUnits : cUnits;
+        uint256 remReserve = (m * S) % WAD;
+        assertTrue(remReserve > 0, "reserve calculation must have nonzero remainder");
+        uint256 expectedReserve = (m * S + WAD - 1) / WAD; // ceil
+        assertEq(PortfolioMath.reserve(hUnits, cUnits, S), expectedReserve);
+
+        // 2. Buy fractional units through router
+        buy(buyer1, true, hUnits, false);
+        buy(buyer2, false, cUnits, false);
+
+        TremorPortfolioMarket.GroupView memory v = market.groupView(gid);
+        assertEq(v.highOutstanding, hUnits);
+        assertEq(v.calmOutstanding, cUnits);
+        assertEq(v.reserveLocked, expectedReserve);
+
+        // 3. Finalize with fractional outcome where (units * ppu) % 1e18 != 0
+        warpWithFeed(uint256(defaultParams().expiry) + 1);
+        finalizeGroup();
+
+        v = market.groupView(gid);
+        assertTrue(v.finalized);
+
+        // Check nonzero remainder on side liabilities
+        uint256 hRem = (hUnits * v.highPpu) % WAD;
+        uint256 cRem = (cUnits * v.calmPpu) % WAD;
+        // Either h or c has nonzero remainder unless ppu is exactly 0 or an integer multiple
+        assertTrue(hRem > 0 || cRem > 0, "final side liability must have nonzero remainder");
+
+        uint256 expectedFinalLocked =
+            PortfolioMath.finalSideLiability(hUnits, v.highPpu) + PortfolioMath.finalSideLiability(cUnits, v.calmPpu);
+        assertEq(v.reserveLocked, expectedFinalLocked);
+        assertEq(v.exitBuffer, 0);
+
+        // 4. Settle fills match exact floored integer liability
+        if (v.highPpu > 0) {
+            uint256 gotHigh = redeemSwap(buyer1, true, hUnits);
+            assertEq(gotHigh, hUnits * v.highPpu / WAD);
+        }
+        if (v.calmPpu > 0) {
+            uint256 gotCalm = redeemSwap(buyer2, false, cUnits);
+            assertEq(gotCalm, cUnits * v.calmPpu / WAD);
+        }
+
+        v = market.groupView(gid);
+        if (v.highPpu > 0) assertEq(v.highOutstanding, 0);
+        if (v.calmPpu > 0) assertEq(v.calmOutstanding, 0);
+    }
+
+    /// @notice Worthless burn integration coverage & finalized reserve/buffer parity.
+    function test_worthlessBurn_integrationAndParity() public {
+        openGroup(100e6);
+        fundVault(10e6);
+        vm.prank(writer);
+        market.allocateExitBuffer(gid, 10e6);
+
+        // Issue 50 HIGH and 50 CALM
+        buy(buyer1, true, 50e18, false);
+        buy(buyer2, false, 50e18, false);
+
+        TremorPortfolioMarket.GroupView memory vBefore = market.groupView(gid);
+        assertEq(vBefore.exitBuffer, 10e6);
+        assertEq(vBefore.reserveLocked, 50e6);
+
+        // Artificially finalize group via onFinalize prank with finalVariance = 0 (xWad = 0 => highPpu = 0, calmPpu = 1e6)
+        warpWithFeed(uint256(defaultParams().expiry) + 1);
+        address acc = market.ACCUMULATOR();
+        vm.prank(acc);
+        market.onFinalize(gid, 0);
+
+        TremorPortfolioMarket.GroupView memory vFinal = market.groupView(gid);
+        assertTrue(vFinal.finalized);
+        assertEq(vFinal.highPpu, 0, "HIGH must be worthless");
+        assertEq(vFinal.calmPpu, 1e6, "CALM must pay full cap S");
+        // Parity: exitBuffer must be zeroed out
+        assertEq(vFinal.exitBuffer, 0, "finalized exitBuffer must be 0");
+        // CALM liability = 50e18 * 1e6 / 1e18 = 50e6; HIGH liability = 0; newLocked = 50e6
+        assertEq(vFinal.reserveLocked, 50e6, "reserveLocked must retain exact remaining liability");
+
+        // Attempting to redeem worthless HIGH through swap router must revert with ZeroPayout
+        ISwapVM.Order memory oHigh = market.orderFor(gid, POB.PMode.SETTLE_HIGH);
+        bytes memory dHigh = takerData(buyer1, true, legDirection(POB.PMode.SETTLE_HIGH), false);
+        vm.startPrank(buyer1);
+        VarianceReceipt(vFinal.highReceipt).approve(address(router), type(uint256).max);
+        vm.expectRevert(abi.encodeWithSelector(TremorPortfolioMarket.ZeroPayout.selector, gid, POB.PMode.SETTLE_HIGH));
+        router.swap(oHigh, 50e18, dHigh);
+        vm.stopPrank();
+
+        // Successful worthless burn reduces highOutstanding to 0 without paying out collateral
+        uint256 buyer1UsdcBefore = usdc.balanceOf(buyer1);
+        vm.prank(buyer1);
+        market.burnWorthless(gid, true, 50e18);
+        assertEq(usdc.balanceOf(buyer1), buyer1UsdcBefore, "worthless burn pays 0 USDC");
+
+        TremorPortfolioMarket.GroupView memory vBurned = market.groupView(gid);
+        assertEq(vBurned.highOutstanding, 0, "highOutstanding must be 0 after burn");
+        assertEq(vBurned.calmOutstanding, 50e18, "calmOutstanding remains intact");
+        assertEq(vBurned.reserveLocked, 50e6, "reserveLocked still protects calm holders");
+
+        // Now redeem the valuable CALM side
+        uint256 calmProceeds = redeemSwap(buyer2, false, 50e18);
+        assertEq(calmProceeds, 50e6);
+
+        TremorPortfolioMarket.GroupView memory vDone = market.groupView(gid);
+        assertEq(vDone.calmOutstanding, 0);
+        assertEq(vDone.reserveLocked, 0);
     }
 }

@@ -34,5 +34,8 @@ PY
 
 mkdir -p "$(dirname "$DEST")"
 cp "$SRC" "$DEST"
-echo "synced $SRC -> $DEST"
+if [ -f "../web/src/config/deployment-${CHAIN_ID}.json" ]; then
+  cp "$SRC" "../web/src/config/deployment-${CHAIN_ID}.json"
+fi
+echo "synced $SRC -> $DEST and deployment-${CHAIN_ID}.json"
 python3 -c "import json;d=json.load(open('$DEST'));print('  chain %s  router %s  controller %s  lens %s  block %s'%(d['chainId'],d['router'],d['seriesFactory'],d['lens'],d['deploymentBlock']))"

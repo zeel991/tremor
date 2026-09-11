@@ -201,7 +201,7 @@ rather than on the controller. `ShipRoundTrip` guards both limits.
 ```bash
 forge fmt --check
 forge build --sizes
-forge test                                                   # 171 tests, 14 suites
+forge test                                                   # 216 tests, 20 suites
 BASE_RPC_URL=https://mainnet.base.org forge test --match-contract ForkE2E -vv
 BASE_RPC_URL=https://mainnet.base.org forge test --match-contract RouterCompat -vv
 ```
@@ -209,7 +209,7 @@ BASE_RPC_URL=https://mainnet.base.org forge test --match-contract RouterCompat -
 `./script/export-abi.sh` refreshes both `../web/src/abi` and `../backend/abi`. **Do it after every
 redeploy**: a stale ABI decodes the live Lens struct into the wrong fields with no error anywhere.
 
-## Test matrix (171 tests)
+## Test matrix (216 tests, 20 suites — counts from the `forge test` run of 2026-09-12)
 
 | Suite | Tests | Coverage |
 |---|---:|---|
@@ -225,12 +225,19 @@ redeploy**: a stale ABI decodes the live Lens struct into the wrong fields with 
 | `RealizedVariance` | 9 | High-precision vectors, phase crossing, invalid answers, windows and decimals |
 | `Lifecycle` | 1 | One end-to-end pass: issue → exit → checkpoint → finalize → redeem → close |
 | `Adversarial` | 22 | Every writer attack, forged orders, cross-series reservations, replay, self-settlement, wiring |
-| `Invariants` | 2 | 9 stateful invariants under a handler (one campaign), plus a scripted test proving the handler reaches every state |
+| `Invariants` | 2 | 9 stateful invariant assertions under a handler (one campaign), plus non-vacuity proof |
 | `ForkE2E` | 2 | Canonical Aqua, Base USDC and real ETH/USD history on a local fork |
+| `PortfolioGate` | 19 | The seven feasibility criteria, end to end |
+| `PortfolioAdversarial` | 13 | Buffer authorization split, reentrant taker callbacks, cross-group, nested fills |
+| `PortfolioEconomics` | 5 | Round trips, complete-set pricing, mispriced-writer loss allocation |
+| `PortfolioVectors` | 5 | 225 exact-rational test cases from `portfolio_reference.py` |
+| `PortfolioInvariants` | 2 | 3 stateful invariants under a handler (one campaign), plus non-vacuity |
+| `PortfolioForkE2E` | 1 | Base fork, real USDC, real Chainlink ETH/USD, full two-sided lifecycle in one test |
 
-The non-vacuity test in `Invariants` exists because an earlier version of the suite passed while never
-successfully issuing a single unit. An invariant suite that cannot reach the interesting states proves
-nothing, so the ability to reach them is itself asserted.
+The non-vacuity tests in `Invariants` and `PortfolioInvariants` prove that both handlers reach
+every active lifecycle state rather than trivially passing without issuing units.
+The executed suite contains **216 tests across 20 suites** (`forge test`, 2026-09-12, 0 failed, 0
+skipped). Suite counts above are taken from that run's per-suite results, not estimated.
 
 ## Measured gas (Base fork, real Chainlink ETH/USD)
 

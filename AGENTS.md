@@ -26,7 +26,7 @@ contracts/   Foundry. src/VarianceSeriesFactory.sol (controller), TremorMarketEn
              tokens/VarianceReceipt, libs/{SeriesParams,VariancePricing,RealizedVariance,TremorOrderBuilder}.
              src/portfolio/ is the v3 portfolio market (HIGH/CALM risk groups, shared max(h,c) reserve,
              exit buffer) — see ARCHITECTURE §2A and CONTRACTS.md "Portfolio markets".
-             test/ (171 tests across 14 suites, incl. stateful invariants and a Base-fork E2E),
+             test/ (216 tests across 20 suites, incl. stateful invariants and two Base-fork E2Es),
              test/vectors/pricing_vectors.json (60 cases at 60 digits, from tools/reference/pricing_reference.py),
              script/ (Deploy, DemoFlow, demo.sh, sync-deployment.sh, export-abi.sh).
              lib/swap-vm and lib/solady are submodules; swap-vm needs `yarn install` inside it.
